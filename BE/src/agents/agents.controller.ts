@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   NotFoundException,
   Param,
   Post,
@@ -12,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AgentsService } from './agents.service';
 import { RegisterAgentDto } from './dto/register-agent.dto';
+import { HeartbeatDto } from './dto/heartbeat.dto';
 
 const ALLOWED_BINARIES = new Set([
   'itom-agent-linux-amd64',
@@ -28,6 +30,14 @@ export class AgentsController {
   @Post('register')
   async register(@Body() body: RegisterAgentDto) {
     return this.agentsService.register(body);
+  }
+
+  @Post('heartbeat')
+  async heartbeat(
+    @Body() body: HeartbeatDto,
+    @Headers('x-request-id') requestIdHeader?: string,
+  ) {
+    return this.agentsService.recordHeartbeat(body, requestIdHeader);
   }
 
   @Get()

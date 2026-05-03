@@ -28,6 +28,6 @@ func New() (*Logger, error) {
 	}
 
 	multi := io.MultiWriter(file, os.Stderr)
-	handler := slog.NewTextHandler(multi, &slog.HandlerOptions{Level: slog.LevelInfo})
+	handler := slog.NewTextHandler(multi, &slog.HandlerOptions{Level: slog.LevelDebug})
 	return slog.New(handler), nil
 }

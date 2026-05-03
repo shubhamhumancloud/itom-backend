@@ -10,16 +10,24 @@ import (
 )
 
 type Config struct {
-	ServerURL       string `json:"serverUrl"`
-	AgentID         string `json:"agentId"`
-	IntervalSeconds int    `json:"intervalSeconds"`
+	ServerURL         string `json:"serverUrl"`
+	AgentID           string `json:"agentId"`
+	IntervalSeconds   int    `json:"intervalSeconds"`
+	FlushSeconds      int    `json:"flushSeconds"`
+	HeartbeatSeconds  int    `json:"heartbeatSeconds"`
+	MaxBatchSize      int    `json:"maxBatchSize"`
+	MaxBufferRows     int    `json:"maxBufferRows"`
 }
 
 const (
-	defaultServer   = "http://localhost:3000"
-	defaultInterval = 10
-	dirName         = ".itom-agent"
-	fileName        = "config.json"
+	defaultServer           = "http://localhost:3000"
+	defaultInterval         = 10
+	defaultFlush            = 60
+	defaultHeartbeat        = 30
+	defaultMaxBatch         = 60
+	defaultMaxBufferRows    = 50000
+	dirName                 = ".itom-agent"
+	fileName                = "config.json"
 )
 
 func defaultPath() (string, error) {
@@ -47,9 +55,13 @@ func Load(path string) (*Config, error) {
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		cfg := &Config{
-			ServerURL:       envOr("ITOM_SERVER_URL", defaultServer),
-			AgentID:         uuid.NewString(),
-			IntervalSeconds: envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
+			ServerURL:         envOr("ITOM_SERVER_URL", defaultServer),
+			AgentID:           uuid.NewString(),
+			IntervalSeconds:   envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
+			FlushSeconds:      defaultFlush,
+			HeartbeatSeconds:  defaultHeartbeat,
+			MaxBatchSize:      defaultMaxBatch,
+			MaxBufferRows:     defaultMaxBufferRows,
 		}
 		if err := save(path, cfg); err != nil {
 			return nil, fmt.Errorf("create config: %w", err)
@@ -78,6 +90,22 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = defaultServer
+		dirty = true
+	}
+	if cfg.FlushSeconds <= 0 {
+		cfg.FlushSeconds = defaultFlush
+		dirty = true
+	}
+	if cfg.HeartbeatSeconds <= 0 {
+		cfg.HeartbeatSeconds = defaultHeartbeat
+		dirty = true
+	}
+	if cfg.MaxBatchSize <= 0 {
+		cfg.MaxBatchSize = defaultMaxBatch
+		dirty = true
+	}
+	if cfg.MaxBufferRows <= 0 {
+		cfg.MaxBufferRows = defaultMaxBufferRows
 		dirty = true
 	}
 	if dirty {

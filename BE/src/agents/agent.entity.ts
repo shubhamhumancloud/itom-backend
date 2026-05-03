@@ -3,7 +3,6 @@ import {
   PrimaryColumn,
   Column,
   CreateDateColumn,
-  UpdateDateColumn,
 } from 'typeorm';
 
 const bigint = {
@@ -63,6 +62,12 @@ export class Agent {
   @CreateDateColumn({ type: 'timestamptz' })
   registeredAt: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  lastSeenAt: Date;
+  @Column({ type: 'timestamptz', nullable: true })
+  lastSeenAt: Date | null;
+
+  @Column({ default: 'unknown' })
+  status: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  statusChangedAt: Date | null;
 }

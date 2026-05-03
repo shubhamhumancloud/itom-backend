@@ -5,12 +5,11 @@ import { NetworkMetric } from './network-metric.entity';
 import { DiskMetric } from './disk-metric.entity';
 import { MetricsController } from './metrics.controller';
 import { MetricsService } from './metrics.service';
-import { AgentsModule } from '../agents/agents.module';
+import { Agent } from '../agents/agent.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Metric, NetworkMetric, DiskMetric]),
-    AgentsModule,
+    TypeOrmModule.forFeature([Metric, NetworkMetric, DiskMetric, Agent]),
   ],
   controllers: [MetricsController],
   providers: [MetricsService],

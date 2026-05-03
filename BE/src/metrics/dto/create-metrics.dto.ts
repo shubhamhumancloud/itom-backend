@@ -9,6 +9,7 @@ import {
   ArrayMinSize,
   IsOptional,
   IsInt,
+  IsUUID,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -101,6 +102,10 @@ export class SampleDto {
 export class CreateMetricsDto {
   @IsString()
   agentId: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  requestId?: string;
 
   @IsArray()
   @ArrayMinSize(1)

@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { MetricsService } from './metrics.service';
 import { CreateMetricsDto } from './dto/create-metrics.dto';
 
@@ -14,9 +21,15 @@ export class MetricsController {
   }
 
   @Post()
-  async ingest(@Body() body: CreateMetricsDto) {
-    const accepted = await this.metricsService.ingest(body);
-    return { accepted };
+  async ingest(
+    @Body() body: CreateMetricsDto,
+    @Headers('x-request-id') requestIdHeader?: string,
+  ) {
+    const result = await this.metricsService.ingest(body, requestIdHeader);
+    if (typeof result === 'object' && result !== null && 'reason' in result) {
+      return result;
+    }
+    return { accepted: result as number };
   }
 
   @Get()
