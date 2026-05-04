@@ -20,7 +20,7 @@ type Config struct {
 }
 
 const (
-	defaultServer           = "http://localhost:3000"
+	defaultServer           = "http://localhost:3005"
 	defaultInterval         = 10
 	defaultFlush            = 60
 	defaultHeartbeat        = 30

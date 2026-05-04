@@ -15,7 +15,7 @@ Laptop A (API)                       Laptop B / C / ... (agent)
 │ Postgres (local)        │
 │   db: itom              │
 └─────────────────────────┘
-        port 3000                              no inbound port
+        port 3005                             no inbound port
 ```
 
 ## Folder layout
@@ -95,23 +95,23 @@ TypeORM `synchronize: true` creates and updates tables (`metric`, `network_metri
 cd backend/BE
 cp .env.example .env           # edit DB_* if needed
 npm install
-npm run start:dev              # default 0.0.0.0:3000, hot-reload
+npm run start:dev              # default 0.0.0.0:3005, hot-reload
 ```
 
 Expected log line:
 
-`ITOM server listening on 0.0.0.0:3000`
+`ITOM server listening on 0.0.0.0:3005`
 
 ### Verify
 
 ```bash
-curl http://localhost:3000/v1/health
+curl http://localhost:3005/v1/health
 # {"status":"ok","time":"2026-..."}
 ```
 
 ### LAN IP and firewall
 
-Agents need `http://<SERVER_IP>:3000`. Discover IP the same way as before (e.g. `ipconfig` on Windows, `ipconfig getifaddr en0` on macOS). Open inbound TCP 3000 on the API host if a firewall blocks it.
+Agents need `http://<SERVER_IP>:3005`. Discover IP the same way as before (e.g. `ipconfig` on Windows, `ipconfig getifaddr en0` on macOS). Open inbound TCP 3000 on the API host if a firewall blocks it.
 
 ---
 
@@ -141,10 +141,10 @@ First run — point at the server:
 
 ```bash
 # Linux / macOS
-ITOM_SERVER_URL=http://<SERVER_IP>:3000 ./dist/itom-agent
+ITOM_SERVER_URL=http://<SERVER_IP>:3005 ./dist/itom-agent
 
 # Windows (PowerShell)
-$env:ITOM_SERVER_URL="http://<SERVER_IP>:3000"
+$env:ITOM_SERVER_URL="http://<SERVER_IP>:3005"
 .\dist\itom-agent-windows-amd64.exe
 ```
 
@@ -157,9 +157,9 @@ Useful flags: `-version`, `-config <path>`.
 ## Verify end-to-end
 
 ```bash
-curl http://localhost:3000/v1/metrics/agents
-curl 'http://localhost:3000/v1/metrics?limit=10'
-curl 'http://localhost:3000/v1/metrics?agentId=<uuid>&limit=10'
+curl http://localhost:3005/v1/metrics/agents
+curl 'http://localhost:3005/v1/metrics?limit=10'
+curl 'http://localhost:3005/v1/metrics?agentId=<uuid>&limit=10'
 ```
 
 Direct SQL (identifiers may be snake_case in DB; quote if needed):

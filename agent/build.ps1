@@ -1,6 +1,6 @@
 $go = "C:\Program Files\Go\bin\go.exe"
 $binary = "itom-agent"
-$version = if ($env:VERSION) { $env:VERSION } else { "0.1.0" }
+$version = if ($env:VERSION) { $env:VERSION } else { "0.2.0" }
 $ldflags = "-s -w -X main.Version=$version"
 $dist = "dist"
 # BE serves binaries and install.sh from this folder

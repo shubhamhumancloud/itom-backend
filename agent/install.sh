@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-SERVER_URL="${ITOM_SERVER_URL:-http://localhost:3000}"
+SERVER_URL="${ITOM_SERVER_URL:-http://localhost:3005}"
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 BINARY_NAME="itom-agent"
