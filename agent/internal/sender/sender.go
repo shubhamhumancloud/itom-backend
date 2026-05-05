@@ -29,6 +29,7 @@ type Sender struct {
 	heartbeatEndpoint string
 	registerEndpoint  string
 	agentID           string
+	tenantID          string
 	client            *http.Client
 	log               *logger.Logger
 }
@@ -48,6 +49,7 @@ type heartbeatPayload struct {
 
 type registerPayload struct {
 	AgentID      string `json:"agentId"`
+	TenantID     string `json:"tenantId,omitempty"`
 	AgentVersion string `json:"agentVersion"`
 	info.Device
 }
@@ -61,13 +63,14 @@ func newHTTPClient() *http.Client {
 	}
 }
 
-func New(serverURL, agentID string, log *logger.Logger) *Sender {
+func New(serverURL, agentID, tenantID string, log *logger.Logger) *Sender {
 	base := strings.TrimRight(serverURL, "/")
 	return &Sender{
 		metricsEndpoint:   base + "/v1/metrics",
 		heartbeatEndpoint: base + "/v1/agents/heartbeat",
 		registerEndpoint:  base + "/v1/agents/register",
 		agentID:           agentID,
+		tenantID:          tenantID,
 		client:            newHTTPClient(),
 		log:               log,
 	}
@@ -76,6 +79,7 @@ func New(serverURL, agentID string, log *logger.Logger) *Sender {
 func (s *Sender) Register(ctx context.Context, version string, d info.Device) error {
 	_, code, err := s.postJSON(ctx, s.registerEndpoint, registerPayload{
 		AgentID:      s.agentID,
+		TenantID:     s.tenantID,
 		AgentVersion: version,
 		Device:       d,
 	}, nil)

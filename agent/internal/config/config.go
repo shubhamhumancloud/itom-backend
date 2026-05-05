@@ -12,6 +12,7 @@ import (
 type Config struct {
 	ServerURL         string `json:"serverUrl"`
 	AgentID           string `json:"agentId"`
+	TenantID          string `json:"tenantId,omitempty"`
 	IntervalSeconds   int    `json:"intervalSeconds"`
 	FlushSeconds      int    `json:"flushSeconds"`
 	HeartbeatSeconds  int    `json:"heartbeatSeconds"`
@@ -57,6 +58,7 @@ func Load(path string) (*Config, error) {
 		cfg := &Config{
 			ServerURL:         envOr("ITOM_SERVER_URL", defaultServer),
 			AgentID:           uuid.NewString(),
+			TenantID:          envOr("ITOM_TENANT_ID", ""),
 			IntervalSeconds:   envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
 			FlushSeconds:      defaultFlush,
 			HeartbeatSeconds:  defaultHeartbeat,
@@ -88,8 +90,20 @@ func Load(path string) (*Config, error) {
 		cfg.IntervalSeconds = defaultInterval
 		dirty = true
 	}
+	if v := os.Getenv("ITOM_SERVER_URL"); v != "" && v != cfg.ServerURL {
+		cfg.ServerURL = v
+		dirty = true
+	}
+	if v := os.Getenv("ITOM_TENANT_ID"); v != "" && v != cfg.TenantID {
+		cfg.TenantID = v
+		dirty = true
+	}
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = defaultServer
+		dirty = true
+	}
+	if v := envOrInt("ITOM_INTERVAL_SECONDS", 0); v > 0 && v != cfg.IntervalSeconds {
+		cfg.IntervalSeconds = v
 		dirty = true
 	}
 	if cfg.FlushSeconds <= 0 {

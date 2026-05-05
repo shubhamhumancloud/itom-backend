@@ -79,7 +79,7 @@ func main() {
 	defer cancel()
 
 	coll := collector.New(log)
-	snd := sender.New(cfg.ServerURL, cfg.AgentID, log)
+	snd := sender.New(cfg.ServerURL, cfg.AgentID, cfg.TenantID, log)
 
 	device := info.Collect(ctx)
 	log.Info("device info collected",
