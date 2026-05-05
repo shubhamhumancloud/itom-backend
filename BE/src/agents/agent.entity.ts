@@ -3,6 +3,7 @@ import {
   PrimaryColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 const bigint = {
@@ -16,6 +17,10 @@ const bigint = {
 export class Agent {
   @PrimaryColumn()
   agentId: string;
+
+  @Column({ nullable: true })
+  @Index()
+  tenantId: string | null;
 
   @Column({ nullable: true })
   agentVersion: string;

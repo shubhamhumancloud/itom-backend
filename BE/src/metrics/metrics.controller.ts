@@ -8,16 +8,16 @@ import {
 } from '@nestjs/common';
 import { MetricsService } from './metrics.service';
 import { CreateMetricsDto } from './dto/create-metrics.dto';
+import { TenantId } from '../common/decorators/tenant.decorator';
 
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly metricsService: MetricsService) {}
 
-  // Note: declare specific routes (`/agents`) before parameterised ones
-  // so the router resolves them correctly.
+  // Declare specific routes before parameterised ones so the router resolves them.
   @Get('agents')
-  async agents() {
-    return this.metricsService.listAgents();
+  async agents(@TenantId() tenantId: string | null) {
+    return this.metricsService.listAgents(tenantId);
   }
 
   @Post()
@@ -35,8 +35,33 @@ export class MetricsController {
   @Get()
   async list(
     @Query('agentId') agentId: string,
+    @TenantId() tenantId: string | null,
     @Query('limit') limit = '100',
   ) {
-    return this.metricsService.list(agentId, parseInt(limit, 10));
+    return this.metricsService.list(agentId, parseInt(limit, 10), tenantId);
+  }
+
+  @Get('network')
+  async network(
+    @TenantId() tenantId: string | null,
+    @Query('agentId') agentId?: string,
+    @Query('interfaceName') interfaceName?: string,
+    @Query('limit') limit = '200',
+  ) {
+    return this.metricsService.listNetwork(
+      agentId,
+      interfaceName,
+      parseInt(limit, 10),
+      tenantId,
+    );
+  }
+
+  @Get('disk')
+  async disk(
+    @TenantId() tenantId: string | null,
+    @Query('agentId') agentId?: string,
+    @Query('limit') limit = '100',
+  ) {
+    return this.metricsService.listDisk(agentId, parseInt(limit, 10), tenantId);
   }
 }

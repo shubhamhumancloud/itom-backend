@@ -18,6 +18,10 @@ export class MetricsService {
   constructor(
     @InjectRepository(Metric)
     private readonly metricsRepo: Repository<Metric>,
+    @InjectRepository(NetworkMetric)
+    private readonly networkRepo: Repository<NetworkMetric>,
+    @InjectRepository(DiskMetric)
+    private readonly diskRepo: Repository<DiskMetric>,
     @InjectRepository(Agent)
     private readonly agentsRepo: Repository<Agent>,
   ) {}
@@ -137,28 +141,79 @@ export class MetricsService {
     });
   }
 
-  async list(agentId: string | undefined, limit: number) {
+  async list(
+    agentId: string | undefined,
+    limit: number,
+    tenantId?: string | null,
+  ) {
     const qb = this.metricsRepo
       .createQueryBuilder('m')
       .orderBy('m.timestamp', 'DESC')
       .limit(limit);
-    if (agentId) qb.where('m.agentId = :agentId', { agentId });
+    if (agentId) qb.andWhere('m.agentId = :agentId', { agentId });
+    if (tenantId) {
+      qb.andWhere(
+        'm.agentId IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        { tenantId },
+      );
+    }
     return qb.getMany();
   }
 
-  async listAgents() {
-    const rows = await this.metricsRepo
+  async listAgents(tenantId?: string | null) {
+    const qb = this.metricsRepo
       .createQueryBuilder('m')
       .select('m.agentId', 'agentId')
       .addSelect('MAX(m.timestamp)', 'lastSeen')
       .addSelect('COUNT(*)', 'sampleCount')
-      .groupBy('m.agentId')
-      .getRawMany();
-
+      .groupBy('m.agentId');
+    if (tenantId) {
+      qb.where(
+        'm.agentId IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        { tenantId },
+      );
+    }
+    const rows = await qb.getRawMany();
     return rows.map((r) => ({
       agentId: r.agentId,
       lastSeen: new Date(r.lastSeen),
       sampleCount: parseInt(r.sampleCount, 10),
     }));
+  }
+
+  async listNetwork(
+    agentId?: string,
+    interfaceName?: string,
+    limit = 200,
+    tenantId?: string | null,
+  ) {
+    const qb = this.networkRepo
+      .createQueryBuilder('n')
+      .orderBy('n.timestamp', 'DESC')
+      .limit(limit);
+    if (agentId) qb.andWhere('n.agentId = :agentId', { agentId });
+    if (interfaceName) qb.andWhere('n.interfaceName = :interfaceName', { interfaceName });
+    if (tenantId) {
+      qb.andWhere(
+        'n.agentId IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        { tenantId },
+      );
+    }
+    return qb.getMany();
+  }
+
+  async listDisk(agentId?: string, limit = 100, tenantId?: string | null) {
+    const qb = this.diskRepo
+      .createQueryBuilder('d')
+      .orderBy('d.timestamp', 'DESC')
+      .limit(limit);
+    if (agentId) qb.andWhere('d.agentId = :agentId', { agentId });
+    if (tenantId) {
+      qb.andWhere(
+        'd.agentId IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        { tenantId },
+      );
+    }
+    return qb.getMany();
   }
 }

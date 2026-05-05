@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   Res,
 } from '@nestjs/common';
 import { Response } from 'express';
@@ -14,6 +15,7 @@ import * as path from 'path';
 import { AgentsService } from './agents.service';
 import { RegisterAgentDto } from './dto/register-agent.dto';
 import { HeartbeatDto } from './dto/heartbeat.dto';
+import { TenantId } from '../common/decorators/tenant.decorator';
 
 const ALLOWED_BINARIES = new Set([
   'itom-agent-linux-amd64',
@@ -32,6 +34,17 @@ export class AgentsController {
     return this.agentsService.register(body);
   }
 
+  // Bind every agent currently lacking a tenantId to the caller's tenant.
+  // Soft auth — relies on the tenant context middleware. Use only in dev /
+  // single-tenant setups; in production gate with a strict guard.
+  @Post('claim-orphans')
+  async claimOrphans(@TenantId() tenantId: string | null) {
+    if (!tenantId) {
+      return { updatedAgents: 0, error: 'no tenant context on request' };
+    }
+    return this.agentsService.claimOrphans(tenantId);
+  }
+
   @Post('heartbeat')
   async heartbeat(
     @Body() body: HeartbeatDto,
@@ -41,8 +54,8 @@ export class AgentsController {
   }
 
   @Get()
-  async list() {
-    return this.agentsService.list();
+  async list(@TenantId() tenantId: string | null) {
+    return this.agentsService.list(tenantId);
   }
 
   // Serve install.sh — users run:
@@ -86,7 +99,23 @@ export class AgentsController {
   }
 
   @Get(':agentId')
-  async findOne(@Param('agentId') agentId: string) {
-    return this.agentsService.findOne(agentId);
+  async findOne(
+    @Param('agentId') agentId: string,
+    @TenantId() tenantId: string | null,
+  ) {
+    return this.agentsService.findOne(agentId, tenantId);
+  }
+
+  @Get(':agentId/heartbeats')
+  async heartbeats(
+    @Param('agentId') agentId: string,
+    @Query('limit') limit = '100',
+    @TenantId() tenantId?: string | null,
+  ) {
+    return this.agentsService.listHeartbeats(
+      agentId,
+      parseInt(limit, 10),
+      tenantId,
+    );
   }
 }

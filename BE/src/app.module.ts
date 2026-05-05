@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 
@@ -11,6 +11,12 @@ import { DiskMetric } from './metrics/disk-metric.entity';
 import { Agent } from './agents/agent.entity';
 import { AgentHeartbeat } from './agents/agent-heartbeat.entity';
 import { RequestDedup } from './agents/request-dedup.entity';
+import { AuthModule } from './common/auth.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { Tenant } from './modules/onboarding/tenant.entity';
+import { TenantUser } from './modules/onboarding/tenant-user.entity';
+import { TenantContextMiddleware } from './common/tenant-context.middleware';
 
 @Module({
   imports: [
@@ -29,13 +35,22 @@ import { RequestDedup } from './agents/request-dedup.entity';
         Agent,
         AgentHeartbeat,
         RequestDedup,
+        Tenant,
+        TenantUser,
       ],
       synchronize: true,
       logging: process.env.DB_LOGGING === 'true',
     }),
+    AuthModule,
     MetricsModule,
     AgentsModule,
+    OnboardingModule,
+    DashboardModule,
   ],
   controllers: [HealthController],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(TenantContextMiddleware).forRoutes('*');
+  }
+}

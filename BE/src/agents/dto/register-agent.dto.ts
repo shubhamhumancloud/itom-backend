@@ -13,6 +13,10 @@ export class RegisterAgentDto {
 
   @IsString()
   @IsOptional()
+  tenantId?: string;
+
+  @IsString()
+  @IsOptional()
   agentVersion?: string;
 
   @IsString()

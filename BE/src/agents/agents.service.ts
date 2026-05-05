@@ -17,9 +17,12 @@ export class AgentsService {
   constructor(
     @InjectRepository(Agent)
     private readonly agentsRepo: Repository<Agent>,
+    @InjectRepository(AgentHeartbeat)
+    private readonly heartbeatsRepo: Repository<AgentHeartbeat>,
   ) {}
 
   async register(dto: RegisterAgentDto): Promise<Agent> {
+    const existing = await this.agentsRepo.findOneBy({ agentId: dto.agentId });
     await this.agentsRepo.upsert(
       {
         agentId: dto.agentId,
@@ -37,21 +40,43 @@ export class AgentsService {
         cpuCores: dto.cpuCores,
         totalMemoryBytes: dto.totalMemoryBytes,
         totalDiskBytes: dto.totalDiskBytes,
+        // Only set tenantId if provided AND not already bound — never overwrite.
+        tenantId: dto.tenantId ?? existing?.tenantId ?? null,
       },
       ['agentId'],
     );
-    this.logger.log(`registered agent=${dto.agentId} host=${dto.hostname}`);
+    this.logger.log(
+      `registered agent=${dto.agentId} host=${dto.hostname} tenant=${
+        dto.tenantId ?? existing?.tenantId ?? '-'
+      }`,
+    );
     return this.agentsRepo.findOneBy({ agentId: dto.agentId });
   }
 
-  async list(): Promise<Agent[]> {
+  async claimOrphans(tenantId: string): Promise<{ updatedAgents: number }> {
+    const result = await this.agentsRepo
+      .createQueryBuilder()
+      .update(Agent)
+      .set({ tenantId })
+      .where('"tenantId" IS NULL')
+      .execute();
+    this.logger.log(
+      `claim-orphans tenant=${tenantId} updated=${result.affected ?? 0}`,
+    );
+    return { updatedAgents: result.affected ?? 0 };
+  }
+
+  async list(tenantId?: string | null): Promise<Agent[]> {
+    const where = tenantId ? { tenantId } : {};
     return this.agentsRepo.find({
+      where,
       order: { lastSeenAt: 'DESC' },
     });
   }
 
-  async findOne(agentId: string): Promise<Agent | null> {
-    return this.agentsRepo.findOneBy({ agentId });
+  async findOne(agentId: string, tenantId?: string | null): Promise<Agent | null> {
+    const where = tenantId ? { agentId, tenantId } : { agentId };
+    return this.agentsRepo.findOneBy(where);
   }
 
   async recordHeartbeat(
@@ -104,6 +129,22 @@ export class AgentsService {
       await em.update(Agent, { agentId: dto.agentId }, patch);
 
       return { accepted: true };
+    });
+  }
+
+  async listHeartbeats(
+    agentId: string,
+    limit = 100,
+    tenantId?: string | null,
+  ): Promise<AgentHeartbeat[]> {
+    if (tenantId) {
+      const owns = await this.agentsRepo.findOneBy({ agentId, tenantId });
+      if (!owns) return [];
+    }
+    return this.heartbeatsRepo.find({
+      where: { agentId },
+      order: { timestamp: 'DESC' },
+      take: limit,
     });
   }
 }
