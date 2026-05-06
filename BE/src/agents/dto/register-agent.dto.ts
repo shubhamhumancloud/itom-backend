@@ -21,6 +21,10 @@ export class RegisterAgentDto {
 
   @IsString()
   @IsOptional()
+  fingerprintHash?: string;
+
+  @IsString()
+  @IsOptional()
   hostname?: string;
 
   @IsString()

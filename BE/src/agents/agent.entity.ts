@@ -26,6 +26,10 @@ export class Agent {
   agentVersion: string;
 
   @Column({ nullable: true })
+  @Index()
+  fingerprintHash: string;
+
+  @Column({ nullable: true })
   hostname: string;
 
   @Column({ nullable: true })

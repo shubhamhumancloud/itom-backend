@@ -32,6 +32,7 @@ export interface OsDistributionEntry {
 export interface CpuByAgentEntry {
   agentId: string;
   hostname: string;
+  os: string | null;
   cpuPercent: number;
   memoryPercent: number;
   diskPercent: number;
@@ -176,6 +177,7 @@ export class DashboardService {
       items.push({
         agentId,
         hostname: a.hostname || agentId.slice(0, 8),
+        os: a.os ?? null,
         cpuPercent: round(Number(m.cpuPercent) || 0),
         memoryPercent: round(Number(m.memoryPercent) || 0),
         diskPercent: round(Number(m.diskPercent) || 0),

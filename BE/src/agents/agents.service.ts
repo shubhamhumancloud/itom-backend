@@ -21,12 +21,43 @@ export class AgentsService {
     private readonly heartbeatsRepo: Repository<AgentHeartbeat>,
   ) {}
 
-  async register(dto: RegisterAgentDto): Promise<Agent> {
-    const existing = await this.agentsRepo.findOneBy({ agentId: dto.agentId });
+  async register(
+    dto: RegisterAgentDto,
+  ): Promise<Agent & { reassigned?: boolean }> {
+    // 1. Fast path: agentId is already known — update in place.
+    let existing = await this.agentsRepo.findOneBy({ agentId: dto.agentId });
+    let canonicalAgentId = dto.agentId;
+    let reassigned = false;
+
+    // 2. Fallback path: agentId is new but fingerprint matches an existing
+    //    record under the same tenant. This happens when the host's
+    //    fingerprint inputs drift (e.g. NIC swap) and the agent computes a
+    //    new deterministic ID. We redirect the agent to the existing record
+    //    instead of creating a duplicate.
+    if (!existing && dto.fingerprintHash) {
+      const tenantScope = dto.tenantId ?? null;
+      const match = await this.agentsRepo.findOne({
+        where: {
+          fingerprintHash: dto.fingerprintHash,
+          ...(tenantScope ? { tenantId: tenantScope } : {}),
+        },
+      });
+      if (match) {
+        canonicalAgentId = match.agentId;
+        existing = match;
+        reassigned = true;
+        this.logger.warn(
+          `fingerprint reconciliation: agent claimed=${dto.agentId} ` +
+            `→ canonical=${match.agentId} (host=${dto.hostname})`,
+        );
+      }
+    }
+
     await this.agentsRepo.upsert(
       {
-        agentId: dto.agentId,
+        agentId: canonicalAgentId,
         agentVersion: dto.agentVersion,
+        fingerprintHash: dto.fingerprintHash ?? existing?.fingerprintHash,
         hostname: dto.hostname,
         os: dto.os,
         arch: dto.arch,
@@ -45,12 +76,15 @@ export class AgentsService {
       },
       ['agentId'],
     );
+
     this.logger.log(
-      `registered agent=${dto.agentId} host=${dto.hostname} tenant=${
+      `registered agent=${canonicalAgentId} host=${dto.hostname} tenant=${
         dto.tenantId ?? existing?.tenantId ?? '-'
-      }`,
+      }${reassigned ? ' (reassigned)' : ''}`,
     );
-    return this.agentsRepo.findOneBy({ agentId: dto.agentId });
+
+    const saved = await this.agentsRepo.findOneBy({ agentId: canonicalAgentId });
+    return { ...saved, reassigned } as Agent & { reassigned?: boolean };
   }
 
   async claimOrphans(tenantId: string): Promise<{ updatedAgents: number }> {
