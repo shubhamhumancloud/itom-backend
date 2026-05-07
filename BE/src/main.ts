@@ -2,10 +2,15 @@ import 'dotenv/config';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
+import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Use the native `ws` adapter (not socket.io) — agents are non-browser
+  // clients, we don't want socket.io's framing overhead or transport
+  // negotiation.
+  app.useWebSocketAdapter(new WsAdapter(app));
   app.setGlobalPrefix('v1', {
     exclude: [
       { path: 'api/v1/onboarding/(.*)', method: RequestMethod.ALL },

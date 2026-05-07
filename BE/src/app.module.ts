@@ -17,6 +17,13 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { Tenant } from './modules/onboarding/tenant.entity';
 import { TenantUser } from './modules/onboarding/tenant-user.entity';
 import { TenantContextMiddleware } from './common/tenant-context.middleware';
+import { ObservabilityModule } from './observability/observability.module';
+import { ProcessMetric } from './observability/entities/process-metric.entity';
+import { BatteryMetric } from './observability/entities/battery-metric.entity';
+import { SensorMetric } from './observability/entities/sensor-metric.entity';
+import { DiskHealth } from './observability/entities/disk-health.entity';
+import { GpuMetric } from './observability/entities/gpu-metric.entity';
+import { SoftwareItem } from './observability/entities/software-item.entity';
 
 @Module({
   imports: [
@@ -37,6 +44,12 @@ import { TenantContextMiddleware } from './common/tenant-context.middleware';
         RequestDedup,
         Tenant,
         TenantUser,
+        ProcessMetric,
+        BatteryMetric,
+        SensorMetric,
+        DiskHealth,
+        GpuMetric,
+        SoftwareItem,
       ],
       synchronize: true,
       logging: process.env.DB_LOGGING === 'true',
@@ -46,6 +59,7 @@ import { TenantContextMiddleware } from './common/tenant-context.middleware';
     AgentsModule,
     OnboardingModule,
     DashboardModule,
+    ObservabilityModule,
   ],
   controllers: [HealthController],
 })

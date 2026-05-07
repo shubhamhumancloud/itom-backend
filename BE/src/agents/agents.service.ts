@@ -113,6 +113,34 @@ export class AgentsService {
     return this.agentsRepo.findOneBy(where);
   }
 
+  async findByFingerprint(fingerprintHash: string): Promise<Agent | null> {
+    if (!fingerprintHash) return null;
+    return this.agentsRepo.findOneBy({ fingerprintHash });
+  }
+
+  /**
+   * Called by the WebSocket gateway on `hello`. Replaces the old REST
+   * heartbeat for liveness — the connection itself is the heartbeat.
+   */
+  async markOnline(agentId: string, agentVersion?: string): Promise<void> {
+    const now = new Date();
+    const patch: Partial<Agent> = {
+      status: 'online',
+      statusChangedAt: now,
+      lastSeenAt: now,
+    };
+    if (agentVersion) patch.agentVersion = agentVersion;
+    await this.agentsRepo.update({ agentId }, patch);
+  }
+
+  /** Called by the WebSocket gateway on disconnect. */
+  async markOffline(agentId: string): Promise<void> {
+    await this.agentsRepo.update(
+      { agentId },
+      { status: 'offline', statusChangedAt: new Date() },
+    );
+  }
+
   async recordHeartbeat(
     dto: HeartbeatDto,
     requestIdHeader: string | undefined,

@@ -13,5 +13,6 @@ import { Agent } from '../agents/agent.entity';
   ],
   controllers: [MetricsController],
   providers: [MetricsService],
+  exports: [MetricsService],
 })
 export class MetricsModule {}
