@@ -1,34 +1,36 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
+	"github.com/itom-mini/agent/internal/fingerprint"
 )
 
 type Config struct {
-	ServerURL         string `json:"serverUrl"`
-	AgentID           string `json:"agentId"`
-	TenantID          string `json:"tenantId,omitempty"`
-	IntervalSeconds   int    `json:"intervalSeconds"`
-	FlushSeconds      int    `json:"flushSeconds"`
-	HeartbeatSeconds  int    `json:"heartbeatSeconds"`
-	MaxBatchSize      int    `json:"maxBatchSize"`
-	MaxBufferRows     int    `json:"maxBufferRows"`
+	ServerURL        string `json:"serverUrl"`
+	AgentID          string `json:"agentId"`
+	FingerprintHash  string `json:"fingerprintHash,omitempty"`
+	TenantID         string `json:"tenantId,omitempty"`
+	IntervalSeconds  int    `json:"intervalSeconds"`
+	FlushSeconds     int    `json:"flushSeconds"`
+	HeartbeatSeconds int    `json:"heartbeatSeconds"`
+	MaxBatchSize     int    `json:"maxBatchSize"`
+	MaxBufferRows    int    `json:"maxBufferRows"`
 }
 
 const (
-	defaultServer           = "http://localhost:3005"
-	defaultInterval         = 10
-	defaultFlush            = 60
-	defaultHeartbeat        = 30
-	defaultMaxBatch         = 60
-	defaultMaxBufferRows    = 50000
-	dirName                 = ".itom-agent"
-	fileName                = "config.json"
+	defaultServer        = "http://localhost:3005"
+	defaultInterval      = 10
+	defaultFlush         = 60
+	defaultHeartbeat     = 30
+	defaultMaxBatch      = 60
+	defaultMaxBufferRows = 50000
+	dirName              = ".itom-agent"
+	fileName             = "config.json"
 )
 
 func defaultPath() (string, error) {
@@ -39,12 +41,14 @@ func defaultPath() (string, error) {
 	return filepath.Join(home, dirName, fileName), nil
 }
 
-// Load reads config from path (or default location). On first run it creates
-// a config file with a generated agentId. Env vars override the defaults
-// for first-run creation only:
+// Load reads config from path (or default location).
 //
-//	ITOM_SERVER_URL — sets serverUrl
-//	ITOM_INTERVAL_SECONDS — sets intervalSeconds
+// Identity rule: AgentID is derived deterministically from
+// (tenantId, OS machine-id, sorted physical MAC addresses) via UUIDv5.
+// On first run we compute and persist it. On subsequent runs we trust
+// what is on disk — even if the fingerprint drifts (e.g. NIC swap), the
+// backend is told the current FingerprintHash and DisplayName so it can
+// reconcile if needed. Only when AgentID is missing do we recompute.
 func Load(path string) (*Config, error) {
 	if path == "" {
 		p, err := defaultPath()
@@ -54,21 +58,27 @@ func Load(path string) (*Config, error) {
 		path = p
 	}
 
+	ctx := context.Background()
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		tenantID := os.Getenv("ITOM_TENANT_ID")
+		fp := fingerprint.Compute(ctx, tenantID)
 		cfg := &Config{
-			ServerURL:         envOr("ITOM_SERVER_URL", defaultServer),
-			AgentID:           uuid.NewString(),
-			TenantID:          envOr("ITOM_TENANT_ID", ""),
-			IntervalSeconds:   envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
-			FlushSeconds:      defaultFlush,
-			HeartbeatSeconds:  defaultHeartbeat,
-			MaxBatchSize:      defaultMaxBatch,
-			MaxBufferRows:     defaultMaxBufferRows,
+			ServerURL:        envOr("ITOM_SERVER_URL", defaultServer),
+			AgentID:          fp.AgentID,
+			FingerprintHash:  fp.Hash,
+			TenantID:         tenantID,
+			IntervalSeconds:  envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
+			FlushSeconds:     defaultFlush,
+			HeartbeatSeconds: defaultHeartbeat,
+			MaxBatchSize:     defaultMaxBatch,
+			MaxBufferRows:    defaultMaxBufferRows,
 		}
 		if err := save(path, cfg); err != nil {
 			return nil, fmt.Errorf("create config: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "created new config at %s\n", path)
+		fmt.Fprintf(os.Stderr, "created new config at %s (agentId=%s)\n",
+			path, cfg.AgentID)
 		return cfg, nil
 	}
 
@@ -82,20 +92,34 @@ func Load(path string) (*Config, error) {
 	}
 
 	dirty := false
-	if cfg.AgentID == "" {
-		cfg.AgentID = uuid.NewString()
+	if v := os.Getenv("ITOM_TENANT_ID"); v != "" && v != cfg.TenantID {
+		cfg.TenantID = v
 		dirty = true
 	}
+
+	// If AgentID is missing (legacy config or user wiped it), regenerate
+	// deterministically from the current fingerprint.
+	if cfg.AgentID == "" {
+		fp := fingerprint.Compute(ctx, cfg.TenantID)
+		cfg.AgentID = fp.AgentID
+		cfg.FingerprintHash = fp.Hash
+		dirty = true
+	} else {
+		// Refresh FingerprintHash every boot so the backend always sees the
+		// current state and can reconcile on drift.
+		fp := fingerprint.Compute(ctx, cfg.TenantID)
+		if cfg.FingerprintHash != fp.Hash {
+			cfg.FingerprintHash = fp.Hash
+			dirty = true
+		}
+	}
+
 	if cfg.IntervalSeconds <= 0 {
 		cfg.IntervalSeconds = defaultInterval
 		dirty = true
 	}
 	if v := os.Getenv("ITOM_SERVER_URL"); v != "" && v != cfg.ServerURL {
 		cfg.ServerURL = v
-		dirty = true
-	}
-	if v := os.Getenv("ITOM_TENANT_ID"); v != "" && v != cfg.TenantID {
-		cfg.TenantID = v
 		dirty = true
 	}
 	if cfg.ServerURL == "" {
@@ -128,6 +152,20 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// Save persists the given config to disk at path (or the default location).
+// Used by callers that mutate the config at runtime — for example, when the
+// backend reassigns the AgentID during register and the agent must adopt it.
+func Save(path string, cfg *Config) error {
+	if path == "" {
+		p, err := defaultPath()
+		if err != nil {
+			return err
+		}
+		path = p
+	}
+	return save(path, cfg)
 }
 
 func save(path string, cfg *Config) error {
