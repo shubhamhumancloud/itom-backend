@@ -95,8 +95,14 @@ export class AgentsController {
         // re-encode trailing " into %22 and break the command. Single
         // quotes are literal everywhere (bash/sh/zsh/dash).
         sh: `curl -fsSL '${publicUrl}/v1/agents/install?token=${encodeURIComponent(token)}' | sudo sh`,
-        // Windows PowerShell (admin) — single quotes are literal in PS too.
-        ps1: `iwr '${publicUrl}/v1/agents/install?token=${encodeURIComponent(token)}&platform=ps1' -UseBasicParsing | iex`,
+        // Windows — wrapped in a `powershell -NoProfile -Command "..."`
+        // launcher so the same one-liner works whether the user pastes it
+        // into cmd.exe, PowerShell, or the Run dialog. The inner script
+        // uses single-quoted URL (PS literal) so the embedded `&` in the
+        // query string is treated as part of the URL, not a PS operator.
+        // The agent itself checks for admin privileges and errors out
+        // with a helpful message if the shell isn't elevated.
+        ps1: `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr '${publicUrl}/v1/agents/install?token=${encodeURIComponent(token)}&platform=ps1' -UseBasicParsing | iex"`,
       },
     };
   }

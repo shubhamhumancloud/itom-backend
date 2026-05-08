@@ -103,7 +103,13 @@ $InstallToken = '${token}'
 # kardianos/service registers a Windows service via the SCM — admin is required.
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  Write-Error "This installer must run in an elevated PowerShell. Right-click PowerShell -> Run as administrator and rerun."
+  Write-Host ""
+  Write-Host "ERROR: this installer must run with Administrator privileges." -ForegroundColor Red
+  Write-Host ""
+  Write-Host "To fix:" -ForegroundColor Yellow
+  Write-Host "  1. Right-click the Start menu and choose 'Windows Terminal (Admin)' or 'PowerShell (Admin)'."
+  Write-Host "  2. Re-paste the install command from the dashboard and run it there."
+  Write-Host ""
   exit 1
 }
 
