@@ -23,6 +23,13 @@ export class RegisterAgentDto {
   @IsOptional()
   fingerprintHash?: string;
 
+  // Hash from the previous (MAC-based) fingerprint formula. Sent by agents
+  // that upgraded in place so the backend can match the existing record
+  // even though the new hash differs. Drop after one release cycle.
+  @IsString()
+  @IsOptional()
+  legacyFingerprintHash?: string;
+
   @IsString()
   @IsOptional()
   hostname?: string;

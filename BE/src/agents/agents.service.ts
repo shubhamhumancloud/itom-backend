@@ -30,25 +30,42 @@ export class AgentsService {
     let reassigned = false;
 
     // 2. Fallback path: agentId is new but fingerprint matches an existing
-    //    record under the same tenant. This happens when the host's
-    //    fingerprint inputs drift (e.g. NIC swap) and the agent computes a
-    //    new deterministic ID. We redirect the agent to the existing record
-    //    instead of creating a duplicate.
-    if (!existing && dto.fingerprintHash) {
+    //    record under the same tenant. We try the new (hardware-UUID-based)
+    //    hash first, then the legacy (MAC-based) hash so devices that
+    //    upgraded in place still resolve to their original AgentID instead
+    //    of creating a duplicate row.
+    //
+    //    The legacy lookup can be removed two releases after the new
+    //    formula ships (every active agent will have re-registered with
+    //    the new hash by then).
+    if (!existing && (dto.fingerprintHash || dto.legacyFingerprintHash)) {
       const tenantScope = dto.tenantId ?? null;
-      const match = await this.agentsRepo.findOne({
-        where: {
-          fingerprintHash: dto.fingerprintHash,
-          ...(tenantScope ? { tenantId: tenantScope } : {}),
-        },
-      });
+      const baseWhere = tenantScope ? { tenantId: tenantScope } : {};
+
+      let match: Agent | null = null;
+      let matchedVia: 'new' | 'legacy' | null = null;
+
+      if (dto.fingerprintHash) {
+        match = await this.agentsRepo.findOne({
+          where: { ...baseWhere, fingerprintHash: dto.fingerprintHash },
+        });
+        if (match) matchedVia = 'new';
+      }
+      if (!match && dto.legacyFingerprintHash) {
+        match = await this.agentsRepo.findOne({
+          where: { ...baseWhere, fingerprintHash: dto.legacyFingerprintHash },
+        });
+        if (match) matchedVia = 'legacy';
+      }
+
       if (match) {
         canonicalAgentId = match.agentId;
         existing = match;
         reassigned = true;
         this.logger.warn(
-          `fingerprint reconciliation: agent claimed=${dto.agentId} ` +
-            `→ canonical=${match.agentId} (host=${dto.hostname})`,
+          `fingerprint reconciliation (via=${matchedVia}): ` +
+            `agent claimed=${dto.agentId} → canonical=${match.agentId} ` +
+            `(host=${dto.hostname})`,
         );
       }
     }
