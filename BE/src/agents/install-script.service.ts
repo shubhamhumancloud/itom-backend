@@ -81,13 +81,56 @@ fi
 echo "Registering service..."
 "$DEST" install
 
-echo "Starting service..."
-"$DEST" start
+if [ "$OS" = "darwin" ]; then
+  # macOS: kardianos/service uses the legacy 'launchctl load' API, which
+  # fails with "Load failed: 5: Input/output error" on Sonoma/Sequoia once
+  # the service has been loaded once and entered a stale state. Use the
+  # modern launchctl bootstrap/kickstart API directly. The plist was just
+  # written by 'itom-agent install', we just need to load it correctly.
+  PLIST="/Library/LaunchDaemons/itom-agent.plist"
+  if [ ! -f "$PLIST" ]; then
+    echo "error: expected $PLIST after 'itom-agent install' but it is missing." >&2
+    exit 1
+  fi
 
-echo
-echo "ITOM agent installed and running as a system service."
-echo "Logs: ~/.itom-agent/agent.log (and your system journal)"
-echo "Manage with: itom-agent {status|stop|start|restart|uninstall}"
+  echo "Starting service (launchctl bootstrap)..."
+  # Bootstrap will fail if the same label is already loaded — bootout first.
+  launchctl bootout system/itom-agent 2>/dev/null || true
+  if ! launchctl bootstrap system "$PLIST"; then
+    echo "error: launchctl bootstrap failed. Check launchd logs:" >&2
+    echo "  sudo launchctl print system/itom-agent" >&2
+    echo "  log show --predicate 'subsystem == \"com.apple.xpc.launchd\"' --last 5m" >&2
+    exit 1
+  fi
+  launchctl enable system/itom-agent 2>/dev/null || true
+  launchctl kickstart -k system/itom-agent 2>/dev/null || true
+
+  echo
+  echo "ITOM agent installed and running as a launchd system daemon."
+  echo
+  echo "Verify status:"
+  echo "  sudo launchctl print system/itom-agent | head -30"
+  echo "  pgrep -lf itom-agent"
+  echo
+  echo "Tail logs (the agent runs as root, so its home is /var/root):"
+  echo "  sudo tail -f /var/root/.itom-agent/agent.log"
+  echo "  log show --process itom-agent --last 5m"
+  echo
+  echo "Manage (use launchctl directly — the 'itom-agent' subcommands"
+  echo "will misbehave on Sonoma+ because kardianos uses the legacy API):"
+  echo "  sudo launchctl bootout   system/itom-agent           # stop"
+  echo "  sudo launchctl bootstrap system $PLIST               # start"
+  echo "  sudo launchctl kickstart -k system/itom-agent        # restart"
+  echo "  sudo $DEST uninstall                                  # uninstall (then bootout)"
+else
+  echo "Starting service..."
+  "$DEST" start
+
+  echo
+  echo "ITOM agent installed and running as a systemd service."
+  echo "Logs: ~/.itom-agent/agent.log (and your system journal)"
+  echo "Manage with: itom-agent {status|stop|start|restart|uninstall}"
+fi
 `;
   }
 
@@ -136,9 +179,21 @@ Write-Host "Starting service..."
 & $Dest start
 
 Write-Host ""
-Write-Host "ITOM agent installed and running as a Windows service."
-Write-Host "Logs: \$env:USERPROFILE\\.itom-agent\\agent.log (and the Windows event log)"
-Write-Host "Manage with: itom-agent {status|stop|start|restart|uninstall}"
+Write-Host "ITOM agent installed and running as a Windows service." -ForegroundColor Green
+Write-Host ""
+Write-Host "Verify status:" -ForegroundColor Yellow
+Write-Host "  Get-Service itom-agent              # PowerShell (no admin needed)"
+Write-Host "  sc query itom-agent                 # cmd"
+Write-Host ""
+Write-Host "Tail logs:"
+Write-Host "  Get-Content \`"\$env:USERPROFILE\\.itom-agent\\agent.log\`" -Tail 20 -Wait"
+Write-Host ""
+Write-Host "Manage (run from any shell, full path required since the install dir is not on PATH):"
+Write-Host "  & '$Dest' status"
+Write-Host "  & '$Dest' stop"
+Write-Host "  & '$Dest' start"
+Write-Host "  & '$Dest' restart"
+Write-Host "  & '$Dest' uninstall"
 `;
   }
 }
