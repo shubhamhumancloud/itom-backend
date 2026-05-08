@@ -32,7 +32,7 @@ Code/
 │   │   │   ├── health/              GET /v1/health
 │   │   │   ├── metrics/             ingest + list metrics, list reporting agents
 │   │   │   └── agents/              agent registration, list/detail, binary/install routes
-│   │   ├── agents-dist/             optional: pre-built agent binaries + install.sh
+│   │   ├── agents-dist/templates/  cross-compiled agent templates (with patcher placeholders)
 │   │   ├── package.json
 │   │   ├── .env.example
 │   │   └── tsconfig.json
@@ -115,42 +115,65 @@ Agents need `http://<SERVER_IP>:3005`. Discover IP the same way as before (e.g. 
 
 ---
 
-## Build the agent
+## Build the agent templates
+
+The backend serves agents via per-tenant **byte-patched templates**. Build them
+once per agent release; the API host then patches the tenantId and serverUrl
+into a fresh copy on every install request.
 
 ```bash
 cd backend/agent
 
-# Current OS → backend/agent/dist/itom-agent
+# Build for the current platform (dev / iteration)
 make build
 
-# All common platforms
+# Build all 5 platform templates and publish them to BE/agents-dist/templates/
 make build-all
-ls dist/
-# itom-agent-linux-amd64, itom-agent-linux-arm64, …
+ls ../BE/agents-dist/templates/
+# itom-agent-linux-amd64, itom-agent-linux-arm64, itom-agent-darwin-amd64, …
 ```
 
-On Windows without Make, use `build.ps1` if present, or invoke `go build` similarly to the Makefile targets.
+On Windows without Make, use `.\build.ps1 build-all` — same outputs.
 
-Static binaries can be copied to `backend/BE/agents-dist/` so the API can serve them from `/v1/agents/download/:filename` (set `AGENTS_DIST_PATH` if you store them elsewhere).
+The "templates" are ordinary cross-compiled binaries that contain the literal
+placeholder strings `ITOMBAKED_TENANT_ID:____…` and `ITOMBAKED_SERVER_URL:____…`
+in their `.rodata` section. The backend's `BinaryPatcherService` finds and
+overwrites them at install time. **There are no per-tenant artifacts on disk.**
 
 ---
 
-## Run the agent
+## Install the agent on a host
 
-First run — point at the server:
+Sign in to the dashboard, open **Settings → Add an agent**, and click
+**Generate install command**. The dashboard mints a short-lived install token
+(default 1h) and gives you a one-line installer per platform:
 
 ```bash
-# Linux / macOS
-ITOM_SERVER_URL=http://<SERVER_IP>:3005 ./dist/itom-agent
+# Linux / macOS — run as root
+curl -fsSL "https://<SERVER>/v1/agents/install?token=eyJ…" | sudo sh
 
-# Windows (PowerShell)
-$env:ITOM_SERVER_URL="http://<SERVER_IP>:3005"
-.\dist\itom-agent-windows-amd64.exe
+# Windows — run in elevated PowerShell
+iwr "https://<SERVER>/v1/agents/install?token=eyJ…&platform=ps1" -UseBasicParsing | iex
 ```
 
-Config, logs, and the SQLite metric buffer live under `~/.itom-agent/` (or `%USERPROFILE%\.itom-agent\` on Windows). Subsequent runs pick up `serverUrl` and reliability knobs from `config.json` unless you override env vars on first-run creation (`ITOM_SERVER_URL`, `ITOM_INTERVAL_SECONDS`).
+The installer:
 
-Useful flags: `-version`, `-config <path>`.
+1. Downloads the per-tenant patched binary (tenantId + serverUrl baked in).
+2. Runs `itom-agent install` to register a system service (systemd /
+   launchd / Windows SCM, abstracted by `kardianos/service`).
+3. Runs `itom-agent start`.
+
+After the command finishes, you can close the terminal — the agent runs in the
+background as a system service. Logs land in `~/.itom-agent/agent.log` (and
+the system journal). Manage it with:
+
+```bash
+itom-agent status
+itom-agent stop
+itom-agent start
+itom-agent restart
+itom-agent uninstall
+```
 
 ---
 
@@ -182,8 +205,9 @@ psql -h localhost -U itom -d itom -c 'SELECT * FROM metric ORDER BY timestamp DE
 | POST | `/v1/agents/heartbeat` | Liveness + uptime (separate from metrics flush) |
 | GET | `/v1/agents` | List registered agents |
 | GET | `/v1/agents/:agentId` | Agent detail |
-| GET | `/v1/agents/install.sh` | Served from `agents-dist/install.sh` if present |
-| GET | `/v1/agents/download/:filename` | Whitelisted pre-built binaries from `agents-dist` |
+| POST | `/v1/agents/install-tokens` | Mint a short-lived install token for the calling tenant (auth required). Returns the per-platform install one-liners. |
+| GET | `/v1/agents/install` | Render the install script (sh by default; `?platform=ps1` for PowerShell). Token required as query param. |
+| GET | `/v1/agents/build` | Stream a freshly-patched per-tenant binary (`?token=…&os=…&arch=…`). Token required. |
 
 ### POST `/v1/metrics` body (shape)
 
@@ -281,7 +305,8 @@ Heartbeats are **not** spooled to SQLite. They run on **`heartbeatSeconds`** and
 | Database missing | Create `itom` database and owner |
 | Agent connection refused | API listening on `0.0.0.0`, firewall, same network |
 | `400` on metrics | Check server logs; validate payload against DTO |
-| `404` on install/binary download | Populate `backend/BE/agents-dist/` or set `AGENTS_DIST_PATH` |
+| `404` on `/v1/agents/build` | Run `make build-all` (or `.\build.ps1 build-all`) inside `backend/agent` to publish templates into `BE/agents-dist/templates/`, or set `AGENT_TEMPLATES_PATH` |
+| `401` on `/v1/agents/install` or `/v1/agents/build` | Token expired or `ITOM_INSTALL_TOKEN_SECRET` rotated. Generate a fresh install command from the dashboard. |
 | Reset dev data | Stop API, drop tables or database, restart (TypeORM recreates schema) |
 
 ---
@@ -293,4 +318,7 @@ Heartbeats are **not** spooled to SQLite. They run on **`heartbeatSeconds`** and
 | `PORT` | HTTP port (default `3000`) |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection |
 | `DB_LOGGING` | `true` to log SQL |
-| `AGENTS_DIST_PATH` | Optional absolute path to folder containing `install.sh` and agent binaries for download routes (defaults to `agents-dist` under `BE`) |
+| `ITOM_PUBLIC_URL` | Reachable URL of this API from a customer's network. Baked into the agent binary at install-request time. Falls back to request headers if unset (dev only). |
+| `ITOM_INSTALL_TOKEN_SECRET` | HMAC secret (≥32 chars) used to sign per-tenant install tokens. If unset the server uses an ephemeral key (tokens die on restart). |
+| `ITOM_INSTALL_TOKEN_TTL_SECONDS` | Override install token TTL (default 3600). |
+| `AGENT_TEMPLATES_PATH` | Optional absolute path to the folder containing the agent template binaries (defaults to `<AGENTS_DIST_PATH or BE/agents-dist>/templates`). |

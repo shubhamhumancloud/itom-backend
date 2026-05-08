@@ -14,11 +14,14 @@ export class HealthController {
 
   @Get('install-info')
   installInfo() {
-    const itomServerUrl = process.env.ITOM_SERVER_URL || 'http://localhost:3007';
+    // Per-tenant install commands now come from POST /v1/agents/install-tokens
+    // (auth required) — they cannot be served unauthenticated because the
+    // tenantId is baked into the binary at install time.
+    const itomServerUrl =
+      process.env.ITOM_SERVER_URL || process.env.ITOM_PUBLIC_URL || '';
     return {
       itomServerUrl,
-      unixCurl: `curl -fsSL ${itomServerUrl}/v1/agents/install.sh | sh`,
-      windowsPowerShell: `iwr ${itomServerUrl}/v1/agents/download/itom-agent-windows-amd64.exe -OutFile itom-agent.exe`,
+      hint: 'Sign in to the dashboard, open Settings, and click "Generate install command".',
     };
   }
 }

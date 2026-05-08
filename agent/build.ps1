@@ -1,10 +1,12 @@
 $go = "C:\Program Files\Go\bin\go.exe"
 $binary = "itom-agent"
-$version = if ($env:VERSION) { $env:VERSION } else { "0.2.0" }
+$version = if ($env:VERSION) { $env:VERSION } else { "0.4.0" }
 $ldflags = "-s -w -X main.Version=$version"
 $dist = "dist"
-# BE serves binaries and install.sh from this folder
-$beDist = "..\BE\agents-dist"
+
+# Backend serves patcher templates from this folder. Every "build-all"
+# invocation refreshes them; there are no per-tenant prebuilt binaries.
+$beTemplates = "..\BE\agents-dist\templates"
 
 $target = if ($args[0]) { $args[0] } else { "build" }
 
@@ -25,7 +27,7 @@ function Run-Build {
 function Run-BuildAll {
     Run-Tidy
     New-Item -ItemType Directory -Force $dist | Out-Null
-    New-Item -ItemType Directory -Force $beDist | Out-Null
+    New-Item -ItemType Directory -Force $beTemplates | Out-Null
 
     $platforms = @(
         @{ OS="linux";   Arch="amd64"; Out="$binary-linux-amd64" },
@@ -42,18 +44,16 @@ function Run-BuildAll {
     }
     Remove-Item Env:\GOOS, Env:\GOARCH, Env:\CGO_ENABLED -ErrorAction SilentlyContinue
 
-    # Copy binaries and install.sh into BE/agents-dist so the server can serve them
-    Write-Host "Copying to $beDist ..."
-    Copy-Item "$dist\*" $beDist -Force
-    Copy-Item "install.sh" $beDist -Force
+    Write-Host "Publishing templates to $beTemplates ..."
+    Copy-Item "$dist\$binary-*" $beTemplates -Force
 
-    Write-Host "Build complete! Binaries in ./$dist/ and $beDist"
+    Write-Host "Build complete. Templates in $beTemplates"
 }
 
 function Run-Clean {
     Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force $beDist -ErrorAction SilentlyContinue
-    Write-Host "Cleaned $dist/ and $beDist"
+    Remove-Item -Recurse -Force $beTemplates -ErrorAction SilentlyContinue
+    Write-Host "Cleaned $dist and $beTemplates"
 }
 
 switch ($target) {

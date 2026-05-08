@@ -2,21 +2,29 @@
 //
 // Lifecycle:
 //
-//  1. Load (or create) the local config file. AgentID is derived
+//  1. Read the baked-in identity (tenantId + serverUrl) from compile-time vars
+//     that the backend overwrites at install-request time. Refuse to run if
+//     the placeholder is still present (i.e. someone tried to run a raw
+//     template).
+//  2. Load (or create) the local config file. AgentID is derived
 //     deterministically from the host's fingerprint on first boot.
-//  2. Open the on-disk SQLite buffer. Recover any samples that were buffered
+//  3. Open the on-disk SQLite buffer. Recover any samples that were buffered
 //     but not yet sent in a previous session.
-//  3. Register with the backend over REST POST /v1/agents/register. This is
-//     a one-shot bootstrap: the backend learns about the agent, may reassign
-//     a canonical agentId, and stores device facts.
-//  4. Open a long-lived WebSocket to /v1/ws. From here on:
-//       - metrics flow over WS (with server acks)
-//       - liveness is the WS connection itself (no REST heartbeat anymore)
-//       - server can push config / commands at any time (future)
-//  5. The collector keeps writing samples to the buffer regardless of WS
-//     state. The flusher drains the buffer through the WS client; if WS is
-//     down, samples accumulate on disk until reconnect.
-//  6. On SIGINT/SIGTERM: cancel context, attempt one final flush, exit.
+//  4. Register with the backend over REST POST /v1/agents/register.
+//  5. Open a long-lived WebSocket to /v1/ws.
+//  6. On SIGINT/SIGTERM (or service stop): cancel context, attempt one final
+//     flush, exit.
+//
+// CLI surface (provided by kardianos/service):
+//
+//   itom-agent install      register with the OS service manager
+//   itom-agent uninstall    unregister from the OS service manager
+//   itom-agent start        ask the service manager to start it
+//   itom-agent stop         ask the service manager to stop it
+//   itom-agent restart      stop + start
+//   itom-agent status       service status
+//   itom-agent run          run in the foreground (default when no args)
+//   itom-agent version      print version
 package main
 
 import (
@@ -25,9 +33,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"os/signal"
+	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,15 +46,118 @@ import (
 	"github.com/itom-mini/agent/internal/sender"
 	"github.com/itom-mini/agent/internal/wsclient"
 	"github.com/itom-mini/agent/internal/wsproto"
+	"github.com/kardianos/service"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=x.y.z"
-var Version = "0.3.0"
+var Version = "0.4.0"
+
+// Patchable identity, written by the backend's BinaryPatcherService at
+// install-request time. The placeholder defaults below are the literal byte
+// strings the patcher searches for in the compiled binary; they MUST be
+// unique enough that no other code section accidentally matches.
+//
+// Layout (must NOT change without also updating the patcher constants):
+//   bakedTenantID   — 64 bytes total, prefix "ITOMBAKED_TENANT_ID:"
+//   bakedServerURL  — 256 bytes total, prefix "ITOMBAKED_SERVER_URL:"
+//
+// The patcher overwrites the entire region with the tenant value followed by
+// NUL padding so the byte length stays identical (Go string headers carry a
+// fixed len; only the content bytes are patched).
+//
+// `var` (not `const`): const literals can be folded into instructions and
+// would not be patchable. With var, the compiler emits the literal into
+// .rodata and the variable header points there — patchable on disk.
+//
+// Lengths are asserted in init() below; any miscount fails at startup.
+var (
+	bakedTenantID = "ITOMBAKED_TENANT_ID:" + // 20 chars
+		"__________" + "__________" + "__________" + "__________" + "____" // 44 chars  → 64
+
+	bakedServerURL = "ITOMBAKED_SERVER_URL:" + // 21 chars
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 50
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 100
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 150
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 200
+		"__________" + "__________" + "__________" + "_____" // 235 → 256
+)
 
 const (
+	tenantIDPrefix  = "ITOMBAKED_TENANT_ID:"
+	serverURLPrefix = "ITOMBAKED_SERVER_URL:"
+	tenantIDLen     = 64
+	serverURLLen    = 256
+	bakedPadCutset  = "_\x00"
+
 	// How long to wait for an ack before treating a metrics send as failed.
 	ackTimeout = 30 * time.Second
 )
+
+func init() {
+	if len(bakedTenantID) != tenantIDLen {
+		panic(fmt.Sprintf("bakedTenantID length is %d; want %d (placeholder miscount)",
+			len(bakedTenantID), tenantIDLen))
+	}
+	if len(bakedServerURL) != serverURLLen {
+		panic(fmt.Sprintf("bakedServerURL length is %d; want %d (placeholder miscount)",
+			len(bakedServerURL), serverURLLen))
+	}
+}
+
+// resolveBaked returns the patched identity, or an error if the binary still
+// contains the placeholder (i.e. it was never patched by the backend).
+func resolveBaked() (tenantID, serverURL string, err error) {
+	tid := strings.TrimRight(bakedTenantID, bakedPadCutset)
+	url := strings.TrimRight(bakedServerURL, bakedPadCutset)
+
+	if strings.HasPrefix(tid, tenantIDPrefix) {
+		return "", "", fmt.Errorf(
+			"tenant id was not patched into this binary; you must download " +
+				"itom-agent from your tenant's install page, not run a raw template")
+	}
+	if strings.HasPrefix(url, serverURLPrefix) {
+		return "", "", fmt.Errorf(
+			"server url was not patched into this binary; you must download " +
+				"itom-agent from your tenant's install page, not run a raw template")
+	}
+	return tid, url, nil
+}
+
+// program is the long-running unit kardianos/service controls.
+type program struct {
+	cfgPath string
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
+	log     *logger.Logger
+}
+
+// Start is non-blocking — kardianos calls it once to launch the worker.
+func (p *program) Start(_ service.Service) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		runAgent(ctx, p.log, p.cfgPath)
+	}()
+	return nil
+}
+
+// Stop is called by the service manager (or by service.Run on SIGINT in
+// interactive mode). It cancels the context and waits for runAgent to exit.
+func (p *program) Stop(_ service.Service) error {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	done := make(chan struct{})
+	go func() { p.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		// Best effort — don't hang the service manager forever.
+	}
+	return nil
+}
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -65,28 +175,111 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg, err := config.Load(*configPath)
+	tenantID, serverURL, err := resolveBaked()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
+	// Make sure config picks up the baked values on first boot. Subsequent
+	// runs read these from the persisted config but env-style overrides are
+	// no longer honoured.
+	if err := os.Setenv("ITOM_TENANT_ID", tenantID); err != nil {
+		log.Warn("failed to seed tenant env", "err", err)
+	}
+	if err := os.Setenv("ITOM_SERVER_URL", serverURL); err != nil {
+		log.Warn("failed to seed server env", "err", err)
+	}
+
+	prog := &program{cfgPath: *configPath, log: log}
+
+	svcConfig := &service.Config{
+		Name:        "itom-agent",
+		DisplayName: "ITOM Agent",
+		Description: "Collects host telemetry for the ITOM platform.",
+	}
+
+	svc, err := service.New(prog, svcConfig)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "service init failed:", err)
+		os.Exit(1)
+	}
+
+	// Subcommand handling (install/start/stop/uninstall/etc.) — only when
+	// invoked from a terminal. When the OS service manager invokes us there
+	// are no extra positional args.
+	if args := flag.Args(); len(args) > 0 {
+		cmd := args[0]
+		switch cmd {
+		case "install", "uninstall", "start", "stop", "restart":
+			if err := service.Control(svc, cmd); err != nil {
+				fmt.Fprintf(os.Stderr, "%s failed: %v\n", cmd, err)
+				os.Exit(1)
+			}
+			fmt.Printf("itom-agent %s: ok\n", cmd)
+			return
+		case "status":
+			st, err := svc.Status()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "status:", err)
+				os.Exit(1)
+			}
+			fmt.Println("itom-agent status:", statusName(st))
+			return
+		case "run":
+			// Explicit foreground run; falls through to svc.Run below.
+		default:
+			fmt.Fprintf(os.Stderr, "unknown command %q\n", cmd)
+			fmt.Fprintln(os.Stderr, "valid: install, uninstall, start, stop, restart, status, run, version")
+			os.Exit(2)
+		}
+	}
+
+	// Bare invocation (no args) or "run": works both interactively and when
+	// invoked by the OS service manager. service.Run blocks; on SIGINT in
+	// interactive mode it calls Stop and returns.
+	if err := svc.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "service run failed:", err)
+		os.Exit(1)
+	}
+}
+
+func statusName(s service.Status) string {
+	switch s {
+	case service.StatusRunning:
+		return "running"
+	case service.StatusStopped:
+		return "stopped"
+	default:
+		return "unknown"
+	}
+}
+
+// runAgent is the original main loop, lifted into a function so it can be
+// driven by kardianos service Start/Stop. It exits when ctx is cancelled.
+func runAgent(ctx context.Context, log *logger.Logger, configPath string) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Error("config load failed", "err", err)
-		os.Exit(1)
+		return
 	}
 
 	bufPath, err := buffer.DefaultPath()
 	if err != nil {
 		log.Error("buffer path failed", "err", err)
-		os.Exit(1)
+		return
 	}
 	buf, err := buffer.Open(bufPath, cfg.MaxBufferRows, log)
 	if err != nil {
 		log.Error("buffer open failed", "err", err)
-		os.Exit(1)
+		return
 	}
 	defer func() { _ = buf.Close() }()
 
 	pending, err := buf.Count()
 	if err != nil {
 		log.Error("buffer count failed", "err", err)
-		os.Exit(1)
+		return
 	}
 	log.Info("buffer status", "pendingSamples", pending)
 
@@ -94,14 +287,12 @@ func main() {
 		"version", Version,
 		"agentId", cfg.AgentID,
 		"server", cfg.ServerURL,
+		"tenantId", cfg.TenantID,
 		"intervalSeconds", cfg.IntervalSeconds,
 		"flushSeconds", cfg.FlushSeconds,
 		"maxBatchSize", cfg.MaxBatchSize,
 		"maxBufferRows", cfg.MaxBufferRows,
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	coll := collector.New(log)
 
@@ -126,7 +317,7 @@ func main() {
 				"newAgentId", resp.AgentID,
 			)
 			cfg.AgentID = resp.AgentID
-			if err := config.Save(*configPath, cfg); err != nil {
+			if err := config.Save(configPath, cfg); err != nil {
 				log.Error("persist reassigned agentId failed", "err", err)
 			}
 		}
@@ -142,14 +333,14 @@ func main() {
 		Logger:          log,
 		OnReassign: func(newID string) {
 			cfg.AgentID = newID
-			if err := config.Save(*configPath, cfg); err != nil {
+			if err := config.Save(configPath, cfg); err != nil {
 				log.Error("persist reassigned agentId failed", "err", err)
 			}
 		},
 	})
 	if err != nil {
 		log.Error("wsclient init failed", "err", err)
-		os.Exit(1)
+		return
 	}
 
 	batchFull := make(chan struct{}, 1)
@@ -225,20 +416,15 @@ func main() {
 	// --- 6. Observability collectors (best-effort, no buffering) ---
 	startObservability(ctx, &wg, log, wsc)
 
-	// --- Shutdown ---
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Info("shutdown signal received", "signal", sig.String())
+	// --- Wait for cancellation, then attempt final flush ---
+	<-ctx.Done()
+	log.Info("shutdown signal received")
 
-	cancel()
 	wg.Wait()
 
 	log.Info("attempting final metrics flush")
 	fctx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer fcancel()
-	// Best-effort final flush. WS may already be closed; that's fine — buffer
-	// keeps the data for next startup.
 	_ = flushOnceBestEffort(fctx, log, buf, wsc, cfg.MaxBatchSize)
 }
 
@@ -259,8 +445,6 @@ func flushUntilIdle(
 		}
 
 		if !wsc.IsConnected() {
-			// Don't burn a backoff cycle just because the connection is
-			// transiently down — wsclient is reconnecting on its own.
 			return failures
 		}
 
@@ -291,7 +475,6 @@ func flushUntilIdle(
 			continue
 
 		case err == nil && result == wsproto.AckRejected:
-			// Server explicitly rejected — drop so we don't loop forever.
 			if err := buf.DeleteUpTo(lastID); err != nil {
 				log.Error("buffer delete after reject failed", "err", err)
 			}

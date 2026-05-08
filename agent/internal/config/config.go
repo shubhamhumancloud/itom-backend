@@ -33,6 +33,13 @@ const (
 	fileName             = "config.json"
 )
 
+// Identity sourced from compile-time-baked values is the source of truth for
+// tenantId and serverUrl. The values are seeded into ITOM_TENANT_ID and
+// ITOM_SERVER_URL by main() before Load is called, so the existing env-var
+// path picks them up on first boot. On subsequent boots the patched binary
+// always overrides whatever happens to be in config.json — this prevents
+// stale config from outlasting a re-install with new tenant/server values.
+
 func defaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

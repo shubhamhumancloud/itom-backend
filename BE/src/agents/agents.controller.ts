@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,36 +8,40 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
-import { Response } from 'express';
-import * as fs from 'fs';
-import * as path from 'path';
+import type { Request, Response } from 'express';
 import { AgentsService } from './agents.service';
 import { RegisterAgentDto } from './dto/register-agent.dto';
 import { HeartbeatDto } from './dto/heartbeat.dto';
 import { TenantId } from '../common/decorators/tenant.decorator';
+import { InstallTokenService } from './install-token.service';
+import {
+  BinaryPatcherService,
+  SupportedArch,
+  SupportedOS,
+} from './binary-patcher.service';
+import { InstallScriptService } from './install-script.service';
 
-const ALLOWED_BINARIES = new Set([
-  'itom-agent-linux-amd64',
-  'itom-agent-linux-arm64',
-  'itom-agent-darwin-amd64',
-  'itom-agent-darwin-arm64',
-  'itom-agent-windows-amd64.exe',
-]);
+const SUPPORTED_OS: ReadonlySet<SupportedOS> = new Set(['linux', 'darwin', 'windows']);
+const SUPPORTED_ARCH: ReadonlySet<SupportedArch> = new Set(['amd64', 'arm64']);
 
 @Controller('agents')
 export class AgentsController {
-  constructor(private readonly agentsService: AgentsService) {}
+  constructor(
+    private readonly agentsService: AgentsService,
+    private readonly installTokens: InstallTokenService,
+    private readonly patcher: BinaryPatcherService,
+    private readonly installScripts: InstallScriptService,
+  ) {}
 
   @Post('register')
   async register(@Body() body: RegisterAgentDto) {
     return this.agentsService.register(body);
   }
 
-  // Bind every agent currently lacking a tenantId to the caller's tenant.
-  // Soft auth — relies on the tenant context middleware. Use only in dev /
-  // single-tenant setups; in production gate with a strict guard.
   @Post('claim-orphans')
   async claimOrphans(@TenantId() tenantId: string | null) {
     if (!tenantId) {
@@ -58,45 +63,116 @@ export class AgentsController {
     return this.agentsService.list(tenantId);
   }
 
-  // Serve install.sh — users run:
-  //   curl -fsSL http://<server>/v1/agents/install.sh | sh
-  // curl does not apply macOS quarantine, so Gatekeeper never blocks the binary.
-  @Get('install.sh')
-  async installScript(@Res() res: Response) {
-    const scriptPath = path.resolve(
-      process.env.AGENTS_DIST_PATH || path.join(process.cwd(), 'agents-dist'),
-      'install.sh',
-    );
-    if (!fs.existsSync(scriptPath)) {
-      throw new NotFoundException('install.sh not found on server');
+  // ---------------------------------------------------------------------
+  // Per-tenant install flow
+  // ---------------------------------------------------------------------
+
+  /**
+   * Mint a short-lived install token for the calling tenant. The dashboard
+   * embeds the returned token in the install one-liner shown to the user.
+   * Token TTL is 1h by default.
+   */
+  @Post('install-tokens')
+  async createInstallToken(
+    @TenantId() tenantId: string | null,
+    @Req() req: Request,
+  ) {
+    if (!tenantId) {
+      throw new UnauthorizedException(
+        'install tokens require an authenticated tenant context',
+      );
     }
-    res.setHeader('Content-Type', 'text/plain');
-    res.sendFile(scriptPath);
+    const { token, expiresAt } = this.installTokens.mint(tenantId);
+    const publicUrl = resolvePublicUrl(req);
+    return {
+      token,
+      expiresAt,
+      tenantId,
+      publicUrl,
+      commands: {
+        // Linux & macOS — single-line installer. Single-quoted on purpose:
+        // double-quoted URLs survive most clipboard paths but some tools
+        // re-encode trailing " into %22 and break the command. Single
+        // quotes are literal everywhere (bash/sh/zsh/dash).
+        sh: `curl -fsSL '${publicUrl}/v1/agents/install?token=${encodeURIComponent(token)}' | sudo sh`,
+        // Windows PowerShell (admin) — single quotes are literal in PS too.
+        ps1: `iwr '${publicUrl}/v1/agents/install?token=${encodeURIComponent(token)}&platform=ps1' -UseBasicParsing | iex`,
+      },
+    };
   }
 
-  // Serve pre-built binaries — only whitelisted filenames are allowed.
-  @Get('download/:filename')
-  async download(@Param('filename') filename: string, @Res() res: Response) {
-    if (!ALLOWED_BINARIES.has(filename)) {
-      throw new NotFoundException('Binary not found');
-    }
-    const distPath = path.resolve(
-      process.env.AGENTS_DIST_PATH || path.join(process.cwd(), 'agents-dist'),
-    );
-    const filePath = path.join(distPath, filename);
+  /**
+   * Render the per-platform install script with the build URL embedded.
+   * Public — gated entirely by the token in the query string.
+   */
+  @Get('install')
+  async renderInstallScript(
+    @Query('token') token: string,
+    @Query('platform') platform: 'sh' | 'ps1' | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const payload = this.installTokens.verify(token);
+    const publicUrl = resolvePublicUrl(req);
+    const useShell = platform !== 'ps1';
+    const body = useShell
+      ? this.installScripts.renderShell(publicUrl, token)
+      : this.installScripts.renderPowerShell(publicUrl, token);
 
-    // Prevent path traversal — resolved path must stay inside distPath
-    if (!filePath.startsWith(distPath + path.sep) && filePath !== distPath) {
-      throw new NotFoundException('Binary not found');
+    res.setHeader('Content-Type', useShell ? 'text/plain' : 'text/plain');
+    // Encourage the client to actually pipe it (no caching, no detection).
+    res.setHeader('Cache-Control', 'no-store');
+    // For audit, advertise the binding so curl-quiet still leaves a trail.
+    res.setHeader('X-Tenant-Id', payload.tenantId);
+    res.send(body);
+  }
+
+  /**
+   * Stream the freshly-patched per-tenant binary. No temp file is written —
+   * the patched bytes live only in this request's Buffer.
+   */
+  @Get('build')
+  async buildAgent(
+    @Query('token') token: string,
+    @Query('os') osQ: string | undefined,
+    @Query('arch') archQ: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const payload = this.installTokens.verify(token);
+
+    const os = (osQ || '').toLowerCase() as SupportedOS;
+    const arch = (archQ || '').toLowerCase() as SupportedArch;
+    if (!SUPPORTED_OS.has(os)) {
+      throw new BadRequestException(
+        `unsupported os '${osQ}' (must be linux, darwin, or windows)`,
+      );
     }
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('Binary not found');
+    if (!SUPPORTED_ARCH.has(arch)) {
+      throw new BadRequestException(
+        `unsupported arch '${archQ}' (must be amd64 or arm64)`,
+      );
     }
+
+    const publicUrl = resolvePublicUrl(req);
+    const { buffer, filename } = await this.patcher.patch({
+      tenantId: payload.tenantId,
+      serverUrl: publicUrl,
+      os,
+      arch,
+    });
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.sendFile(filePath);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Tenant-Id', payload.tenantId);
+    res.end(buffer);
   }
+
+  // ---------------------------------------------------------------------
+  // Existing per-agent reads
+  // ---------------------------------------------------------------------
 
   @Get(':agentId')
   async findOne(
@@ -118,4 +194,27 @@ export class AgentsController {
       tenantId,
     );
   }
+}
+
+/**
+ * Determine the public URL of the API. Order (first hit wins):
+ *  1. ITOM_SERVER_URL env var (project convention; set this in .env).
+ *  2. ITOM_PUBLIC_URL env var (alias, kept for compatibility).
+ *  3. The X-Forwarded-Proto + X-Forwarded-Host headers (behind a proxy).
+ *  4. The request's protocol + host header.
+ *
+ * The result is the value baked into the agent's serverUrl, so it must be
+ * reachable from the customer's network. Never hardcoded.
+ */
+function resolvePublicUrl(req: Request): string {
+  const fromEnv = process.env.ITOM_SERVER_URL || process.env.ITOM_PUBLIC_URL;
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+
+  const xfProto = (req.headers['x-forwarded-proto'] as string) || '';
+  const xfHost = (req.headers['x-forwarded-host'] as string) || '';
+  if (xfProto && xfHost) return `${xfProto}://${xfHost}`;
+
+  const proto = (req.protocol || 'http').toString();
+  const host = req.headers.host || 'localhost';
+  return `${proto}://${host}`;
 }
