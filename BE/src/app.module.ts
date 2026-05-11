@@ -24,6 +24,13 @@ import { SensorMetric } from './observability/entities/sensor-metric.entity';
 import { DiskHealth } from './observability/entities/disk-health.entity';
 import { GpuMetric } from './observability/entities/gpu-metric.entity';
 import { SoftwareItem } from './observability/entities/software-item.entity';
+import { DiscoveryModule } from './discovery/discovery.module';
+import { ScanJob } from './discovery/entities/scan-job.entity';
+import { DiscoverySession } from './discovery/entities/discovery-session.entity';
+import { Observation } from './discovery/entities/observation.entity';
+import { Credential } from './discovery/entities/credential.entity';
+import { AuditLog } from './discovery/entities/audit-log.entity';
+import { Collector } from './discovery/entities/collector.entity';
 
 @Module({
   imports: [
@@ -50,6 +57,12 @@ import { SoftwareItem } from './observability/entities/software-item.entity';
         DiskHealth,
         GpuMetric,
         SoftwareItem,
+        ScanJob,
+        DiscoverySession,
+        Observation,
+        Credential,
+        AuditLog,
+        Collector,
       ],
       synchronize: true,
       logging: process.env.DB_LOGGING === 'true',
@@ -60,6 +73,7 @@ import { SoftwareItem } from './observability/entities/software-item.entity';
     OnboardingModule,
     DashboardModule,
     ObservabilityModule,
+    DiscoveryModule,
   ],
   controllers: [HealthController],
 })
