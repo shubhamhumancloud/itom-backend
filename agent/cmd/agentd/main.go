@@ -46,7 +46,7 @@ import (
 	"github.com/itom-mini/agent/internal/sender"
 	"github.com/itom-mini/agent/internal/wsclient"
 	"github.com/itom-mini/agent/internal/wsproto"
-	"github.com/kardianos/service"
+	"github.com/kardianos/service" 
 )
 
 // Version is set at build time via -ldflags "-X main.Version=x.y.z"
@@ -307,7 +307,7 @@ func runAgent(ctx context.Context, log *logger.Logger, configPath string) {
 		"macAddresses", device.MACAddresses,
 	)
 
-	resp, err := snd.Register(ctx, Version, cfg.FingerprintHash, device)
+	resp, err := snd.Register(ctx, Version, cfg.FingerprintHash, cfg.LegacyFingerprintHash, device)
 	if err != nil {
 		log.Error("registration failed (will retry over WS hello)", "err", err)
 	} else {

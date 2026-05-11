@@ -8,18 +8,20 @@ import (
 	"path/filepath"
 
 	"github.com/itom-mini/agent/internal/fingerprint"
+	"github.com/itom-mini/agent/internal/paths"
 )
 
 type Config struct {
-	ServerURL        string `json:"serverUrl"`
-	AgentID          string `json:"agentId"`
-	FingerprintHash  string `json:"fingerprintHash,omitempty"`
-	TenantID         string `json:"tenantId,omitempty"`
-	IntervalSeconds  int    `json:"intervalSeconds"`
-	FlushSeconds     int    `json:"flushSeconds"`
-	HeartbeatSeconds int    `json:"heartbeatSeconds"`
-	MaxBatchSize     int    `json:"maxBatchSize"`
-	MaxBufferRows    int    `json:"maxBufferRows"`
+	ServerURL             string `json:"serverUrl"`
+	AgentID               string `json:"agentId"`
+	FingerprintHash       string `json:"fingerprintHash,omitempty"`
+	LegacyFingerprintHash string `json:"legacyFingerprintHash,omitempty"`
+	TenantID              string `json:"tenantId,omitempty"`
+	IntervalSeconds       int    `json:"intervalSeconds"`
+	FlushSeconds          int    `json:"flushSeconds"`
+	HeartbeatSeconds      int    `json:"heartbeatSeconds"`
+	MaxBatchSize          int    `json:"maxBatchSize"`
+	MaxBufferRows         int    `json:"maxBufferRows"`
 }
 
 const (
@@ -41,7 +43,7 @@ const (
 // stale config from outlasting a re-install with new tenant/server values.
 
 func defaultPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
@@ -69,17 +71,21 @@ func Load(path string) (*Config, error) {
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		tenantID := os.Getenv("ITOM_TENANT_ID")
-		fp := fingerprint.Compute(ctx, tenantID)
+		fp, err := fingerprint.Compute(ctx, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint: %w", err)
+		}
 		cfg := &Config{
-			ServerURL:        envOr("ITOM_SERVER_URL", defaultServer),
-			AgentID:          fp.AgentID,
-			FingerprintHash:  fp.Hash,
-			TenantID:         tenantID,
-			IntervalSeconds:  envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
-			FlushSeconds:     defaultFlush,
-			HeartbeatSeconds: defaultHeartbeat,
-			MaxBatchSize:     defaultMaxBatch,
-			MaxBufferRows:    defaultMaxBufferRows,
+			ServerURL:             envOr("ITOM_SERVER_URL", defaultServer),
+			AgentID:               fp.AgentID,
+			FingerprintHash:       fp.Hash,
+			LegacyFingerprintHash: fp.LegacyHash,
+			TenantID:              tenantID,
+			IntervalSeconds:       envOrInt("ITOM_INTERVAL_SECONDS", defaultInterval),
+			FlushSeconds:          defaultFlush,
+			HeartbeatSeconds:      defaultHeartbeat,
+			MaxBatchSize:          defaultMaxBatch,
+			MaxBufferRows:         defaultMaxBufferRows,
 		}
 		if err := save(path, cfg); err != nil {
 			return nil, fmt.Errorf("create config: %w", err)
@@ -105,18 +111,29 @@ func Load(path string) (*Config, error) {
 	}
 
 	// If AgentID is missing (legacy config or user wiped it), regenerate
-	// deterministically from the current fingerprint.
+	// deterministically from the current fingerprint. Otherwise we KEEP the
+	// existing AgentID — never recompute it on upgrade — and only refresh
+	// the hashes so the backend can reconcile.
 	if cfg.AgentID == "" {
-		fp := fingerprint.Compute(ctx, cfg.TenantID)
+		fp, err := fingerprint.Compute(ctx, cfg.TenantID)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint: %w", err)
+		}
 		cfg.AgentID = fp.AgentID
 		cfg.FingerprintHash = fp.Hash
+		cfg.LegacyFingerprintHash = fp.LegacyHash
 		dirty = true
 	} else {
-		// Refresh FingerprintHash every boot so the backend always sees the
-		// current state and can reconcile on drift.
-		fp := fingerprint.Compute(ctx, cfg.TenantID)
+		fp, err := fingerprint.Compute(ctx, cfg.TenantID)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint: %w", err)
+		}
 		if cfg.FingerprintHash != fp.Hash {
 			cfg.FingerprintHash = fp.Hash
+			dirty = true
+		}
+		if cfg.LegacyFingerprintHash != fp.LegacyHash {
+			cfg.LegacyFingerprintHash = fp.LegacyHash
 			dirty = true
 		}
 	}

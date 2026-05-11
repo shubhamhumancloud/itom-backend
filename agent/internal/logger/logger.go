@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/itom-mini/agent/internal/paths"
 )
 
 // Logger is a thin alias so callers can `log.Info(...)` directly.
@@ -13,7 +15,7 @@ type Logger = slog.Logger
 // New writes plain-text logs to both stderr and ~/.itom-agent/agent.log.
 // File rotation is intentionally omitted in Phase 1 — add lumberjack in Phase 3.
 func New() (*Logger, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}

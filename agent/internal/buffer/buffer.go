@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/itom-mini/agent/internal/collector"
+	"github.com/itom-mini/agent/internal/paths"
 
 	_ "modernc.org/sqlite"
 )
@@ -38,7 +39,7 @@ type sqliteBuffer struct {
 
 // DefaultPath returns ~/.itom-agent/buffer.db
 func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.UserHomeDir()
 	if err != nil {
 		return "", err
 	}

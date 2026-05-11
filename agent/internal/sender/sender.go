@@ -27,10 +27,11 @@ type Sender struct {
 }
 
 type registerPayload struct {
-	AgentID         string `json:"agentId"`
-	TenantID        string `json:"tenantId,omitempty"`
-	AgentVersion    string `json:"agentVersion"`
-	FingerprintHash string `json:"fingerprintHash,omitempty"`
+	AgentID               string `json:"agentId"`
+	TenantID              string `json:"tenantId,omitempty"`
+	AgentVersion          string `json:"agentVersion"`
+	FingerprintHash       string `json:"fingerprintHash,omitempty"`
+	LegacyFingerprintHash string `json:"legacyFingerprintHash,omitempty"`
 	info.Device
 }
 
@@ -60,15 +61,16 @@ func New(serverURL, agentID, tenantID string, log *logger.Logger) *Sender {
 
 func (s *Sender) Register(
 	ctx context.Context,
-	version, fingerprintHash string,
+	version, fingerprintHash, legacyFingerprintHash string,
 	d info.Device,
 ) (*RegisterResponse, error) {
 	body, code, err := s.postJSON(ctx, s.registerEndpoint, registerPayload{
-		AgentID:         s.agentID,
-		TenantID:        s.tenantID,
-		AgentVersion:    version,
-		FingerprintHash: fingerprintHash,
-		Device:          d,
+		AgentID:               s.agentID,
+		TenantID:              s.tenantID,
+		AgentVersion:          version,
+		FingerprintHash:       fingerprintHash,
+		LegacyFingerprintHash: legacyFingerprintHash,
+		Device:                d,
 	})
 	if err != nil {
 		return nil, err
