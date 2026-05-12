@@ -1,7 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Agent } from './agent.entity';
-import { AgentHeartbeat } from './agent-heartbeat.entity';
+import { AgentStatusEvent } from './agent-status-event.entity';
 import { RequestDedup } from './request-dedup.entity';
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
@@ -15,7 +15,7 @@ import { InstallScriptService } from './install-script.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Agent, AgentHeartbeat, RequestDedup]),
+    TypeOrmModule.forFeature([Agent, AgentStatusEvent, RequestDedup]),
     MetricsModule,
     forwardRef(() => ObservabilityModule),
   ],

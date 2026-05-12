@@ -9,7 +9,7 @@ import { Metric } from './metrics/metric.entity';
 import { NetworkMetric } from './metrics/network-metric.entity';
 import { DiskMetric } from './metrics/disk-metric.entity';
 import { Agent } from './agents/agent.entity';
-import { AgentHeartbeat } from './agents/agent-heartbeat.entity';
+import { AgentStatusEvent } from './agents/agent-status-event.entity';
 import { RequestDedup } from './agents/request-dedup.entity';
 import { AuthModule } from './common/auth.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
@@ -54,7 +54,7 @@ import { DiscoveryEvent } from './discovery/entities/discovery-event.entity';
         NetworkMetric,
         DiskMetric,
         Agent,
-        AgentHeartbeat,
+        AgentStatusEvent,
         RequestDedup,
         Tenant,
         TenantUser,
