@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosnmp/gosnmp"
+
 	"github.com/itom-mini/collector/internal/discovery/device"
 	"github.com/itom-mini/collector/internal/discovery/snmp"
 	"github.com/itom-mini/collector/internal/discovery/snmp/walkers"
@@ -36,25 +38,14 @@ func Factory() device.Driver { return NewDriver() }
 func (d *Driver) Vendor() device.Vendor { return device.VendorGenericSNMP }
 
 func (d *Driver) Ingest(ctx context.Context, creds device.Creds) (device.IngestResult, error) {
-	if creds.SNMPCommunity == "" {
+	if !creds.HasSNMP() {
 		return device.IngestResult{}, &device.ErrAuth{
-			Wrapped: errors.New("generic_snmp: SNMP community required"),
+			Wrapped: errors.New("generic_snmp: SNMP credential (v2c community or v3 username) required"),
 		}
 	}
 
-	c, err := snmp.Open(ctx, snmp.Config{
-		Target:    creds.Host,
-		Community: creds.SNMPCommunity,
-	})
+	c, err := openSNMP(ctx, creds, "")
 	if err != nil {
-		// Map snmp.* errors to device.* errors so the dispatcher can
-		// classify uniformly.
-		if snmp.IsAuth(err) {
-			return device.IngestResult{}, &device.ErrAuth{Wrapped: err}
-		}
-		if snmp.IsUnreachable(err) || snmp.IsTimeout(err) {
-			return device.IngestResult{}, &device.ErrUnreachable{Wrapped: err}
-		}
 		return device.IngestResult{}, err
 	}
 	defer c.Close()
@@ -239,16 +230,15 @@ func (d *Driver) Ingest(ctx context.Context, creds device.Creds) (device.IngestR
 		// (We can revisit if a customer needs aggressive sweeping.)
 	}
 
-	// 8. FDB — switch's MAC↔port table. Modern Q-BRIDGE first;
-	// legacy dot1d as fallback.
-	fdb, _ := walkers.ReadFdb(c)
-	if len(fdb) == 0 {
-		fdb, _ = walkers.ReadFdbLegacy(c)
-	}
+	// 8. FDB — switch's MAC↔port table. On Cisco IOS / IOS-XE a plain
+	// v2c walk returns only the native VLAN's MACs; we use the
+	// per-VLAN community trick to see every VLAN. Detection is by
+	// sysObjectID prefix (Cisco = 1.3.6.1.4.1.9).
+	fdb := collectFDB(ctx, c, creds, sys.ObjectID)
 	for _, f := range fdb {
 		res.Observations = append(res.Observations, wsproto.Observation{
 			SubjectKind: "fdb",
-			SubjectKey:  fmt.Sprintf("chassis:%s|fdb:%s", chassisID, f.MAC),
+			SubjectKey:  fmt.Sprintf("chassis:%s|fdb:%s|vlan:%d", chassisID, f.MAC, f.VlanID),
 			Attribute:   "entry",
 			Value: map[string]any{
 				"vlanId":  f.VlanID,
@@ -294,6 +284,126 @@ func (d *Driver) Ingest(ctx context.Context, creds device.Creds) (device.IngestR
 	}
 
 	return res, nil
+}
+
+// isCisco returns true if the device's sysObjectID is under Cisco's
+// enterprise OID (1.3.6.1.4.1.9). Only Cisco IOS / IOS-XE needs the
+// per-VLAN trick — NX-OS and most non-Cisco gear expose VLAN-aware
+// data through Q-BRIDGE-MIB directly.
+func isCisco(sysObjectID string) bool {
+	return strings.HasPrefix(sysObjectID, "1.3.6.1.4.1.9.") ||
+		strings.HasPrefix(sysObjectID, ".1.3.6.1.4.1.9.")
+}
+
+// collectFDB does the standard FDB walk plus, on Cisco IOS, one
+// re-walk per VLAN with the per-VLAN community/context trick. Results
+// are unioned by (vlan, MAC).
+//
+// Why a wrapper function: keeps the main Ingest body readable; the
+// Cisco quirk lives in one named place.
+func collectFDB(
+	ctx context.Context,
+	c *snmp.Client,
+	creds device.Creds,
+	sysObjectID string,
+) []walkers.FdbEntry {
+	// Default path — Q-BRIDGE first, legacy dot1d fallback.
+	base, _ := walkers.ReadFdb(c)
+	if len(base) == 0 {
+		base, _ = walkers.ReadFdbLegacy(c)
+	}
+	if !isCisco(sysObjectID) {
+		return base
+	}
+
+	// Cisco path. Enumerate VLANs and re-walk per VLAN.
+	vlans, _ := walkers.ReadVlans(c)
+	if len(vlans) == 0 {
+		return base
+	}
+
+	// Dedup key: vlanId + MAC. The base walk already saw native-VLAN
+	// rows; keep those, add any new rows we discover under specific
+	// VLAN contexts.
+	type key struct {
+		vlan int
+		mac  string
+	}
+	seen := map[key]bool{}
+	out := make([]walkers.FdbEntry, 0, len(base))
+	for _, f := range base {
+		seen[key{f.VlanID, f.MAC}] = true
+		out = append(out, f)
+	}
+	for _, v := range vlans {
+		if v.State != "operational" || v.ID == 0 || v.ID == 1002 || v.ID == 1003 || v.ID == 1004 || v.ID == 1005 {
+			// Skip default (1) is intentionally NOT skipped — we
+			// already saw VLAN 1's MACs in the base walk. The 1002-
+			// 1005 range is Cisco's reserved token-ring/FDDI VLANs
+			// (always there, never useful).
+			continue
+		}
+		ctxSnmp, err := openSNMP(ctx, creds, fmt.Sprintf("@%d", v.ID))
+		if err != nil {
+			// Bad credential for this VLAN context, or device blocks
+			// it — skip silently. Other VLANs may still work.
+			continue
+		}
+		rows, _ := walkers.ReadFdb(ctxSnmp)
+		ctxSnmp.Close()
+		for _, f := range rows {
+			// The walker reads vlanId from the OID suffix, but in a
+			// per-VLAN-community walk the suffix may collapse — force
+			// our context VLAN onto the row so the dedup key is correct.
+			f.VlanID = v.ID
+			k := key{f.VlanID, f.MAC}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// openSNMP picks v2c or v3 from creds and returns a session, mapping
+// snmp.* error types to device.* error types so the crawl classifier
+// sees uniform shapes regardless of which SNMP version we tried.
+//
+// vlanSuffix (e.g. "@10") is appended to a v2c community for the Cisco
+// per-VLAN FDB trick. On v3 we use ContextName="vlan-10" instead.
+func openSNMP(ctx context.Context, creds device.Creds, vlanSuffix string) (*snmp.Client, error) {
+	cfg := snmp.Config{Target: creds.Host}
+	if creds.SNMPv3Username != "" {
+		cfg.Version = gosnmp.Version3
+		cfg.V3 = snmp.V3Config{
+			Username:     creds.SNMPv3Username,
+			AuthProtocol: creds.SNMPv3AuthProtocol,
+			AuthKey:      creds.SNMPv3AuthKey,
+			PrivProtocol: creds.SNMPv3PrivProtocol,
+			PrivKey:      creds.SNMPv3PrivKey,
+		}
+		if vlanSuffix != "" {
+			// "@10" → "vlan-10" — gosnmp passes ContextName through to
+			// the agent which scopes the read.
+			cfg.ContextName = "vlan-" + strings.TrimPrefix(vlanSuffix, "@")
+		}
+	} else {
+		cfg.Version = gosnmp.Version2c
+		cfg.Community = creds.SNMPCommunity + vlanSuffix
+	}
+	c, err := snmp.Open(ctx, cfg)
+	if err != nil {
+		if snmp.IsAuth(err) {
+			return nil, &device.ErrAuth{Wrapped: err}
+		}
+		if snmp.IsUnreachable(err) || snmp.IsTimeout(err) {
+			return nil, &device.ErrUnreachable{Wrapped: err}
+		}
+		return nil, err
+	}
+	return c, nil
 }
 
 // ts formats a fixed time as RFC3339Nano UTC — every observation

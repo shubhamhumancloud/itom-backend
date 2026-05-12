@@ -6,30 +6,44 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 
+	"github.com/itom-mini/collector/internal/discovery/device"
 	"github.com/itom-mini/collector/internal/discovery/snmp"
 )
 
-// probeSNMPSysObjectID does a single SNMPv2c GET for sysObjectID.0.
-// Returns the OID as a dotted string, or "" on any failure
-// (no-community, timeout, NoSuchObject).
+// probeSNMPSysObjectID does a single GET for sysObjectID.0 in whichever
+// SNMP version the credentials support (v3 preferred when username is
+// set; v2c otherwise). Returns the OID as a dotted string, or "" on
+// any failure.
 //
-// This is the authoritative vendor signal — the score.go switch maps
-// known sysObjectID prefixes (Fortinet 12356, Palo Alto 25461, Check
-// Point 2620, Cisco 9, Juniper 2636) to vendors with high confidence.
+// Score.go maps known sysObjectID prefixes (Fortinet 12356, Palo Alto
+// 25461, Check Point 2620, Cisco 9, Juniper 2636) to vendors with high
+// confidence — this is the strongest signal we have outside SSH banner.
 //
-// Cost: one UDP round trip with a small payload (~80 bytes). Cheap
-// enough to run on every probe; we still gate it on "community is set"
-// since v2c is the v2c-only path for now.
-func probeSNMPSysObjectID(ctx context.Context, host, community string, timeout time.Duration) string {
-	if community == "" {
+// Cost: one UDP round trip (v2c) or three for v3's engine discovery.
+// Cheap enough on every probe; gated on "SNMP creds present" so v3-only
+// customers don't pay for v2c attempts that would silently fail.
+func probeSNMPSysObjectID(ctx context.Context, host string, creds device.Creds, timeout time.Duration) string {
+	if !creds.HasSNMP() {
 		return ""
 	}
 	cfg := snmp.Config{
-		Target:    host,
-		Community: community,
-		Version:   gosnmp.Version2c,
-		Timeout:   timeout,
-		Retries:   1, // fingerprint probe — one retry is enough, don't burn time
+		Target:  host,
+		Timeout: timeout,
+		Retries: 1, // one retry — don't burn time on a probe
+		RatePPS: 50,
+	}
+	if creds.SNMPv3Username != "" {
+		cfg.Version = gosnmp.Version3
+		cfg.V3 = snmp.V3Config{
+			Username:     creds.SNMPv3Username,
+			AuthProtocol: creds.SNMPv3AuthProtocol,
+			AuthKey:      creds.SNMPv3AuthKey,
+			PrivProtocol: creds.SNMPv3PrivProtocol,
+			PrivKey:      creds.SNMPv3PrivKey,
+		}
+	} else {
+		cfg.Version = gosnmp.Version2c
+		cfg.Community = creds.SNMPCommunity
 	}
 	c, err := snmp.Open(ctx, cfg)
 	if err != nil {

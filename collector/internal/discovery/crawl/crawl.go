@@ -49,6 +49,10 @@ type Options struct {
 	MaxDevices      int
 	MaxConcurrency  int // workers across devices; default 8
 	FingerprintOpts fingerprint.Options
+	// MaxConsecutiveFailures puts a device on a blacklist for the rest
+	// of the crawl after this many in-a-row failures from one IP.
+	// Chapter-2 politeness rule (default 3).
+	MaxConsecutiveFailures int
 }
 
 // Crawler holds the dependencies. Reuse across jobs is safe.
@@ -66,6 +70,7 @@ type Stats struct {
 	DevicesRefusedByCIDR int
 	DevicesAuthFailed    int
 	DevicesUnreachable   int
+	DevicesBlacklisted   int
 	DriverFailures       int
 	ChassisAliases       int
 	Hops                 int
@@ -106,20 +111,25 @@ func (c *Crawler) Run(
 	if opts.MaxConcurrency <= 0 {
 		opts.MaxConcurrency = 8
 	}
+	if opts.MaxConsecutiveFailures <= 0 {
+		opts.MaxConsecutiveFailures = 3
+	}
 
 	state := &runState{
-		log:         c.Log,
-		guard:       c.Guard,
-		registry:    c.Registry,
-		fpOpts:      opts.FingerprintOpts,
-		creds:       creds,
-		maxDepth:    opts.MaxDepth,
-		maxDevices:  opts.MaxDevices,
-		numWorkers:  opts.MaxConcurrency,
-		seenIPs:     map[string]bool{},
-		seenChassis: map[string]string{}, // chassisID → first-seen IP
-		batch:       make([]wsproto.Observation, 0, 200),
-		emit:        emit,
+		log:                    c.Log,
+		guard:                  c.Guard,
+		registry:               c.Registry,
+		fpOpts:                 opts.FingerprintOpts,
+		creds:                  creds,
+		maxDepth:               opts.MaxDepth,
+		maxDevices:             opts.MaxDevices,
+		numWorkers:             opts.MaxConcurrency,
+		maxConsecutiveFailures: opts.MaxConsecutiveFailures,
+		seenIPs:                map[string]bool{},
+		seenChassis:            map[string]string{},
+		blacklist:              map[string]bool{},
+		batch:                  make([]wsproto.Observation, 0, 200),
+		emit:                   emit,
 	}
 
 	// Pre-seed the queue.
@@ -179,16 +189,19 @@ type runState struct {
 	registry *driver.Registry
 	fpOpts   fingerprint.Options
 	creds    device.Creds
-	maxDepth   int
-	maxDevices int
-	numWorkers int
+	maxDepth               int
+	maxDevices             int
+	numWorkers             int
+	maxConsecutiveFailures int
 
 	mu sync.Mutex
 	cond        *sync.Cond // initialised lazily
 	queue       []queued
-	seenIPs     map[string]bool
-	seenChassis map[string]string // chassisID → first-seen IP
-	idleWorkers int
+	seenIPs       map[string]bool
+	seenChassis   map[string]string // chassisID → first-seen IP
+	failureCount  map[string]int    // IP → consecutive failures
+	blacklist     map[string]bool   // IPs we'll no longer touch this run
+	idleWorkers   int
 
 	batch    []wsproto.Observation
 	emit     EmitChunk
@@ -210,6 +223,14 @@ func (s *runState) queueLocked(q queued) {
 		s.cond = sync.NewCond(&s.mu)
 	}
 	if s.seenIPs[q.ip] {
+		return
+	}
+	if s.blacklist[q.ip] {
+		// This IP failed too many times already; don't requeue it
+		// even if a different upstream device hints at it. Bumping
+		// stats here lets the operator see "we saw 5 references to
+		// this dead host" instead of silently dropping.
+		s.stats.DevicesBlacklisted++
 		return
 	}
 	s.queue = append(s.queue, q)
@@ -409,39 +430,51 @@ func (s *runState) processOne(ctx context.Context, q queued) {
 	s.mu.Unlock()
 }
 
-// handleDriverError classifies and records an ingest failure.
+// handleDriverError classifies and records an ingest failure, then
+// updates the per-IP failure counter — if we hit the threshold for
+// this device, blacklist it so future neighbour hints don't re-poke it.
 func (s *runState) handleDriverError(ip string, vendor device.Vendor, err error) {
 	reason := "ingest_failed"
 	switch {
 	case isAuthErr(err):
 		reason = "auth_failed"
-		s.mu.Lock()
-		s.stats.DevicesAuthFailed++
-		s.mu.Unlock()
 	case isUnreachableErr(err):
 		reason = "unreachable"
-		s.mu.Lock()
-		s.stats.DevicesUnreachable++
-		s.mu.Unlock()
-	default:
-		s.mu.Lock()
-		s.stats.DriverFailures++
-		s.mu.Unlock()
 	}
-	s.log.Warn("driver ingest failed; continuing",
-		"ip", ip, "vendor", string(vendor), "err", err, "reason", reason)
 	s.mu.Lock()
+	switch reason {
+	case "auth_failed":
+		s.stats.DevicesAuthFailed++
+	case "unreachable":
+		s.stats.DevicesUnreachable++
+	default:
+		s.stats.DriverFailures++
+	}
+	if s.failureCount == nil {
+		s.failureCount = map[string]int{}
+	}
+	s.failureCount[ip]++
+	blacklisted := false
+	if s.failureCount[ip] >= s.maxConsecutiveFailures {
+		s.blacklist[ip] = true
+		blacklisted = true
+	}
 	s.addObs(wsproto.Observation{
 		SubjectKind: "device",
 		SubjectKey:  fmt.Sprintf("ip:%s", ip),
 		Attribute:   reason,
 		Value: map[string]any{
-			"vendor": string(vendor),
-			"error":  err.Error(),
+			"vendor":          string(vendor),
+			"error":           err.Error(),
+			"consecutiveFail": s.failureCount[ip],
+			"blacklisted":     blacklisted,
 		},
 		SeenAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	s.mu.Unlock()
+	s.log.Warn("driver ingest failed",
+		"ip", ip, "vendor", string(vendor), "reason", reason,
+		"consecutive", s.failureCount[ip], "blacklisted", blacklisted, "err", err)
 }
 
 func isAuthErr(err error) bool {

@@ -42,10 +42,12 @@ import (
 // Version is set at build time via -ldflags "-X main.Version=x.y.z"
 var Version = "0.1.0"
 
-// Patchable identity, written by the backend's BinaryPatcherService at
-// install-request time. Same byte-patching trick as the agent. The patcher
-// must be updated to support these placeholders before we ship a real
-// collector install endpoint.
+// Patchable identity, written by the backend's CollectorBinaryPatcher
+// at install-request time. Same byte-patching trick as the agent.
+//
+// The placeholder slots are sized generously so they survive every
+// realistic tenant id / URL / token. The patcher overwrites with the
+// real value and NUL-pads the remainder; resolveBaked() trims the pad.
 var (
 	bakedTenantID = "ITOMBAKED_TENANT_ID:" + // 20
 		"__________" + "__________" + "__________" + "__________" + "____" // 44 → 64
@@ -56,14 +58,38 @@ var (
 		"__________" + "__________" + "__________" + "__________" + "__________" + // 150
 		"__________" + "__________" + "__________" + "__________" + "__________" + // 200
 		"__________" + "__________" + "__________" + "_____" // 235 → 256
+
+	bakedCollectorID = "ITOMBAKED_COLLECTOR_ID:" + // 23
+		"__________" + "__________" + "__________" + "__________" + "_" // 41 → 64
+
+	bakedAuthToken = "ITOMBAKED_COLLECTOR_AUTH:" + // 25
+		"__________" + "__________" + "__________" + "_______" + // 64 → 89
+		"__________" + "__________" + "__________" + "_________" // 128
+	// Auth token = 64 hex chars; this slot leaves room for a longer
+	// future format (JWT, signed bearer) without binary surgery.
+
+	bakedCIDRPubKey = "ITOMBAKED_CIDR_PUBKEY:" + // 22
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 72
+		"__________" + "__________" + "__________" + "__________" + "________" // 130
+	// Ed25519 public key is 32 bytes → 44 base64 chars; the 130-byte
+	// slot is intentional padding so we can swap to a longer signature
+	// scheme later without re-baking templates.
 )
 
 const (
-	tenantIDPrefix  = "ITOMBAKED_TENANT_ID:"
-	serverURLPrefix = "ITOMBAKED_SERVER_URL:"
-	tenantIDLen     = 64
-	serverURLLen    = 256
-	bakedPadCutset  = "_\x00"
+	tenantIDPrefix    = "ITOMBAKED_TENANT_ID:"
+	serverURLPrefix   = "ITOMBAKED_SERVER_URL:"
+	collectorIDPrefix = "ITOMBAKED_COLLECTOR_ID:"
+	authTokenPrefix   = "ITOMBAKED_COLLECTOR_AUTH:"
+	cidrPubKeyPrefix  = "ITOMBAKED_CIDR_PUBKEY:"
+
+	tenantIDLen    = 64
+	serverURLLen   = 256
+	collectorIDLen = 64
+	authTokenLen   = 128
+	cidrPubKeyLen  = 130
+
+	bakedPadCutset = "_\x00"
 )
 
 func init() {
@@ -72,6 +98,15 @@ func init() {
 	}
 	if len(bakedServerURL) != serverURLLen {
 		panic(fmt.Sprintf("bakedServerURL length is %d; want %d", len(bakedServerURL), serverURLLen))
+	}
+	if len(bakedCollectorID) != collectorIDLen {
+		panic(fmt.Sprintf("bakedCollectorID length is %d; want %d", len(bakedCollectorID), collectorIDLen))
+	}
+	if len(bakedAuthToken) != authTokenLen {
+		panic(fmt.Sprintf("bakedAuthToken length is %d; want %d", len(bakedAuthToken), authTokenLen))
+	}
+	if len(bakedCIDRPubKey) != cidrPubKeyLen {
+		panic(fmt.Sprintf("bakedCIDRPubKey length is %d; want %d", len(bakedCIDRPubKey), cidrPubKeyLen))
 	}
 }
 
@@ -89,22 +124,21 @@ type resolvedIdentity struct {
 
 // resolveIdentity prefers baked values over env vars; env vars are the
 // dev fallback. Failing here is fatal — we can't run a job without a
-// tenant id, server url, or signature-verification key.
+// tenant id, server url, collector id, auth token, or
+// signature-verification key.
 func resolveIdentity() (resolvedIdentity, error) {
-	tid := strings.TrimRight(bakedTenantID, bakedPadCutset)
-	url := strings.TrimRight(bakedServerURL, bakedPadCutset)
-	if strings.HasPrefix(tid, tenantIDPrefix) {
-		tid = os.Getenv("ITOM_COLLECTOR_TENANT_ID")
-	}
-	if strings.HasPrefix(url, serverURLPrefix) {
-		url = os.Getenv("ITOM_COLLECTOR_SERVER_URL")
-	}
+	tid := trimBaked(bakedTenantID, tenantIDPrefix, "ITOM_COLLECTOR_TENANT_ID")
+	url := trimBaked(bakedServerURL, serverURLPrefix, "ITOM_COLLECTOR_SERVER_URL")
+	cid := trimBaked(bakedCollectorID, collectorIDPrefix, "ITOM_COLLECTOR_ID")
+	tok := trimBaked(bakedAuthToken, authTokenPrefix, "ITOM_COLLECTOR_AUTH_TOKEN")
+	pub := trimBaked(bakedCIDRPubKey, cidrPubKeyPrefix, "ITOM_COLLECTOR_CIDR_PUBKEY")
+
 	r := resolvedIdentity{
 		tenantID:      tid,
 		serverURL:     url,
-		collectorID:   os.Getenv("ITOM_COLLECTOR_ID"),
-		authToken:     os.Getenv("ITOM_COLLECTOR_AUTH_TOKEN"),
-		cidrPubKeyB64: os.Getenv("ITOM_COLLECTOR_CIDR_PUBKEY"),
+		collectorID:   cid,
+		authToken:     tok,
+		cidrPubKeyB64: pub,
 	}
 	if r.tenantID == "" {
 		return r, fmt.Errorf("missing tenantId (set baked var or ITOM_COLLECTOR_TENANT_ID)")
@@ -122,6 +156,18 @@ func resolveIdentity() (resolvedIdentity, error) {
 		return r, fmt.Errorf("missing cidr public key (set ITOM_COLLECTOR_CIDR_PUBKEY); refusing to run without signature verification")
 	}
 	return r, nil
+}
+
+// trimBaked returns the patched value if the placeholder was overwritten,
+// or falls back to the env var if the binary is still a template. The
+// installer path always runs against patched binaries; env vars exist
+// only for local dev iteration.
+func trimBaked(baked, prefix, envVar string) string {
+	v := strings.TrimRight(baked, bakedPadCutset)
+	if strings.HasPrefix(v, prefix) {
+		return os.Getenv(envVar)
+	}
+	return v
 }
 
 type program struct {

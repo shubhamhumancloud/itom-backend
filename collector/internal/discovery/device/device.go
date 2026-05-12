@@ -47,9 +47,23 @@ type Creds struct {
 	Password             string
 	APIKey               string
 	TLSFingerprintSHA256 string
-	// SNMPv2c community. Empty means "no SNMP credential" — fingerprint
-	// SNMP-sysObjectID probe is skipped, generic-SNMP driver refuses.
+	// SNMPv2c community. Empty means "no v2c credential" — but the SNMPv3
+	// fields below may still be populated for a v3-only device.
 	SNMPCommunity string
+	// SNMPv3 USM parameters. SNMPv3Username being non-empty switches
+	// the SNMP driver/fingerprint probe into v3 mode.
+	SNMPv3Username     string
+	SNMPv3AuthProtocol string // "sha" | "sha256" | "sha512" | "md5" | ""
+	SNMPv3AuthKey      string
+	SNMPv3PrivProtocol string // "aes" | "aes192" | "aes256" | "des" | ""
+	SNMPv3PrivKey      string
+}
+
+// HasSNMP returns true if either v2c community or v3 username is set.
+// Used by the fingerprint probe and the generic_snmp driver to know
+// whether SNMP credentials were supplied at all.
+func (c Creds) HasSNMP() bool {
+	return c.SNMPCommunity != "" || c.SNMPv3Username != ""
 }
 
 // Fingerprint is the evidence + best-guess output of the identify
