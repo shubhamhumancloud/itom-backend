@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -234,13 +235,31 @@ func (c *Client) runOnce(parent context.Context) error {
 	}
 	c.log.Info("ws connected", "url", c.wsURL)
 
-	// gorilla resets the read deadline on every pong. Set the initial deadline.
+	// The server sends a WebSocket ping every 30s. Each ping we receive
+	// pushes the read deadline forward. PingHandler (not PongHandler) is the
+	// one that fires on incoming pings — the agent never receives pongs in
+	// this protocol because the agent never sends pings, so a PongHandler
+	// would never fire and the deadline would never extend.
 	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetPingHandler(func(appData string) error {
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			return err
+		}
+		// Replicate gorilla's default: reply with a pong so the server's
+		// liveness check stays happy.
+		err := conn.WriteControl(
+			websocket.PongMessage,
+			[]byte(appData),
+			time.Now().Add(writeTimeout),
+		)
+		if err == websocket.ErrCloseSent {
+			return nil
+		}
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return nil
+		}
+		return err
 	})
-	// Auto-reply to server pings (gorilla does this by default; pong handler
-	// above just extends the deadline).
 
 	// Send hello as the very first frame.
 	hello := wsproto.Hello{
