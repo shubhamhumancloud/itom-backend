@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   NotFoundException,
   Param,
   Post,
@@ -15,7 +14,6 @@ import {
 import type { Request, Response } from 'express';
 import { AgentsService } from './agents.service';
 import { RegisterAgentDto } from './dto/register-agent.dto';
-import { HeartbeatDto } from './dto/heartbeat.dto';
 import { TenantId } from '../common/decorators/tenant.decorator';
 import { InstallTokenService } from './install-token.service';
 import {
@@ -48,14 +46,6 @@ export class AgentsController {
       return { updatedAgents: 0, error: 'no tenant context on request' };
     }
     return this.agentsService.claimOrphans(tenantId);
-  }
-
-  @Post('heartbeat')
-  async heartbeat(
-    @Body() body: HeartbeatDto,
-    @Headers('x-request-id') requestIdHeader?: string,
-  ) {
-    return this.agentsService.recordHeartbeat(body, requestIdHeader);
   }
 
   @Get()
@@ -188,13 +178,13 @@ export class AgentsController {
     return this.agentsService.findOne(agentId, tenantId);
   }
 
-  @Get(':agentId/heartbeats')
-  async heartbeats(
+  @Get(':agentId/status-events')
+  async statusEvents(
     @Param('agentId') agentId: string,
     @Query('limit') limit = '100',
     @TenantId() tenantId?: string | null,
   ) {
-    return this.agentsService.listHeartbeats(
+    return this.agentsService.listStatusEvents(
       agentId,
       parseInt(limit, 10),
       tenantId,

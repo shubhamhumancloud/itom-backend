@@ -3,12 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Agent } from './agent.entity';
 import { RegisterAgentDto } from './dto/register-agent.dto';
-import { HeartbeatDto } from './dto/heartbeat.dto';
-import { AgentHeartbeat } from './agent-heartbeat.entity';
-
-export type HeartbeatResult =
-  | { accepted: true }
-  | { accepted: false; reason: 'duplicate' };
+import { AgentStatusEvent } from './agent-status-event.entity';
 
 @Injectable()
 export class AgentsService {
@@ -17,8 +12,8 @@ export class AgentsService {
   constructor(
     @InjectRepository(Agent)
     private readonly agentsRepo: Repository<Agent>,
-    @InjectRepository(AgentHeartbeat)
-    private readonly heartbeatsRepo: Repository<AgentHeartbeat>,
+    @InjectRepository(AgentStatusEvent)
+    private readonly statusEventsRepo: Repository<AgentStatusEvent>,
   ) {}
 
   async register(
@@ -136,93 +131,81 @@ export class AgentsService {
   }
 
   /**
-   * Called by the WebSocket gateway on `hello`. Replaces the old REST
-   * heartbeat for liveness — the connection itself is the heartbeat.
+   * Called by the WebSocket gateway on `hello`. The WS connection itself is
+   * the liveness signal, so this updates `agents.status` and only writes an
+   * `agent_status_events` row when the status actually changed online→offline
+   * or offline→online. No per-tick rows.
    */
   async markOnline(agentId: string, agentVersion?: string): Promise<void> {
-    const now = new Date();
-    const patch: Partial<Agent> = {
-      status: 'online',
-      statusChangedAt: now,
-      lastSeenAt: now,
-    };
-    if (agentVersion) patch.agentVersion = agentVersion;
-    await this.agentsRepo.update({ agentId }, patch);
+    await this.agentsRepo.manager.transaction(async (em) => {
+      const agent = await em.findOne(Agent, { where: { agentId } });
+      if (!agent) return;
+
+      const now = new Date();
+      const becameOnline = agent.status !== 'online';
+
+      const patch: Partial<Agent> = { lastSeenAt: now };
+      if (becameOnline) {
+        patch.status = 'online';
+        patch.statusChangedAt = now;
+      }
+      if (agentVersion) patch.agentVersion = agentVersion;
+
+      await em.update(Agent, { agentId }, patch);
+
+      if (becameOnline) {
+        await em.save(
+          em.create(AgentStatusEvent, {
+            agentId,
+            tenantId: agent.tenantId ?? null,
+            status: 'online',
+            occurredAt: now,
+            agentVersion: agentVersion ?? agent.agentVersion ?? null,
+          }),
+        );
+      }
+    });
   }
 
   /** Called by the WebSocket gateway on disconnect. */
   async markOffline(agentId: string): Promise<void> {
-    await this.agentsRepo.update(
-      { agentId },
-      { status: 'offline', statusChangedAt: new Date() },
-    );
-  }
+    await this.agentsRepo.manager.transaction(async (em) => {
+      const agent = await em.findOne(Agent, { where: { agentId } });
+      if (!agent) return;
 
-  async recordHeartbeat(
-    dto: HeartbeatDto,
-    requestIdHeader: string | undefined,
-  ): Promise<HeartbeatResult> {
-    const requestId = requestIdHeader?.trim();
-    if (!requestId) {
-      this.logger.warn(
-        'heartbeat missing X-Request-Id; accepting without idempotency key',
+      if (agent.status === 'offline') return; // already offline, no transition
+
+      const now = new Date();
+      await em.update(
+        Agent,
+        { agentId },
+        { status: 'offline', statusChangedAt: now },
       );
-    }
-
-    return this.agentsRepo.manager.transaction(async (em) => {
-      if (requestId) {
-        const inserted: { requestId: string }[] = await em.query(
-          `INSERT INTO "request_dedup" ("requestId", "agentId", endpoint)
-           VALUES ($1, $2, 'heartbeat')
-           ON CONFLICT ("requestId") DO NOTHING
-           RETURNING "requestId"`,
-          [requestId, dto.agentId],
-        );
-        if (!inserted?.length) {
-          return { accepted: false, reason: 'duplicate' as const };
-        }
-      }
-
-      const ts = new Date(dto.timestamp);
-      const uptime =
-        dto.uptimeSeconds !== undefined && dto.uptimeSeconds !== null
-          ? dto.uptimeSeconds
-          : null;
 
       await em.save(
-        em.create(AgentHeartbeat, {
-          agentId: dto.agentId,
-          timestamp: ts,
-          agentVersion: dto.agentVersion ?? null,
-          uptimeSeconds: uptime,
+        em.create(AgentStatusEvent, {
+          agentId,
+          tenantId: agent.tenantId ?? null,
+          status: 'offline',
+          occurredAt: now,
+          agentVersion: agent.agentVersion ?? null,
         }),
       );
-
-      const agent = await em.findOne(Agent, { where: { agentId: dto.agentId } });
-      const now = new Date();
-      const patch: Partial<Agent> = { lastSeenAt: ts };
-      if (agent && agent.status !== 'online') {
-        patch.status = 'online';
-        patch.statusChangedAt = now;
-      }
-      await em.update(Agent, { agentId: dto.agentId }, patch);
-
-      return { accepted: true };
     });
   }
 
-  async listHeartbeats(
+  async listStatusEvents(
     agentId: string,
     limit = 100,
     tenantId?: string | null,
-  ): Promise<AgentHeartbeat[]> {
+  ): Promise<AgentStatusEvent[]> {
     if (tenantId) {
       const owns = await this.agentsRepo.findOneBy({ agentId, tenantId });
       if (!owns) return [];
     }
-    return this.heartbeatsRepo.find({
+    return this.statusEventsRepo.find({
       where: { agentId },
-      order: { timestamp: 'DESC' },
+      order: { occurredAt: 'DESC' },
       take: limit,
     });
   }

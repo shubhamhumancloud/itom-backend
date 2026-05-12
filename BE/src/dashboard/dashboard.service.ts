@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Agent } from '../agents/agent.entity';
-import { AgentHeartbeat } from '../agents/agent-heartbeat.entity';
 import { Metric } from '../metrics/metric.entity';
 
 export interface DashboardSummary {
@@ -45,8 +44,6 @@ export class DashboardService {
   constructor(
     @InjectRepository(Agent)
     private readonly agentsRepo: Repository<Agent>,
-    @InjectRepository(AgentHeartbeat)
-    private readonly heartbeatsRepo: Repository<AgentHeartbeat>,
     @InjectRepository(Metric)
     private readonly metricsRepo: Repository<Metric>,
   ) {}
@@ -98,18 +95,21 @@ export class DashboardService {
     since.setUTCHours(0, 0, 0, 0);
     since.setUTCDate(since.getUTCDate() - (safeDays - 1));
 
-    const qb = this.heartbeatsRepo
-      .createQueryBuilder('h')
-      .select(`date_trunc('day', h.timestamp)`, 'day')
+    // Derived from the `metrics` table: each metrics sample is proof the
+    // agent was online at that moment. Replaces the old per-tick heartbeats
+    // source (table dropped — WS ping/pong handles liveness now).
+    const qb = this.metricsRepo
+      .createQueryBuilder('m')
+      .select(`date_trunc('day', m.timestamp)`, 'day')
       .addSelect('COUNT(*)', 'count')
-      .addSelect('COUNT(DISTINCT h."agentId")', 'agents')
-      .where('h.timestamp >= :since', { since })
+      .addSelect('COUNT(DISTINCT m."agentId")', 'agents')
+      .where('m.timestamp >= :since', { since })
       .groupBy('day')
       .orderBy('day', 'ASC');
 
     if (tenantId) {
       qb.andWhere(
-        'h.agentId IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        'm."agentId" IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
         { tenantId },
       );
     }
