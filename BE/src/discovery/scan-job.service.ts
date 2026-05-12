@@ -1,10 +1,19 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Cron } from '@nestjs/schedule';
+import { DataSource, LessThan, Repository } from 'typeorm';
 import { ScanJob, ScanJobPillar, ScanJobStatus } from './entities/scan-job.entity';
 import { DiscoverySession } from './entities/discovery-session.entity';
 import { Observation } from './entities/observation.entity';
 import { AuditLogService } from './audit-log.service';
+
+/**
+ * How long a job is allowed to sit in `assigned` or `running` before the
+ * sweeper declares it dead. Tuned for the longest pillar we expect — a
+ * full SNMP crawl on a 100-device site lands well inside 10 minutes; we
+ * use 20 to keep operator-visible "stuck job" alerts rare.
+ */
+const SCAN_JOB_STALE_MS = 20 * 60 * 1000;
 
 /** Postgres NOTIFY channel used to wake the dispatcher on insert. */
 export const SCAN_JOB_NOTIFY_CHANNEL = 'disc_scan_job_new';
@@ -107,6 +116,51 @@ export class ScanJobService {
       { id },
       { status: 'failed' as ScanJobStatus, statusReason: text.slice(0, 1024) },
     );
+  }
+
+  /**
+   * Stale-job sweeper — chapter-0 exit checklist. A collector that dies
+   * mid-walk leaves its row stuck in `running`. Every minute we flip any
+   * row older than SCAN_JOB_STALE_MS to `timeout` so the dashboard
+   * surfaces a clear failure instead of an indefinite spinner.
+   *
+   * We update by `updatedAt` (not createdAt) so a long-running but
+   * actively-progressing job — every chunk bumps updatedAt via
+   * markRunning/markCompleted — isn't killed mid-flight.
+   */
+  @Cron('0 * * * * *') // every minute at the top of the second
+  async sweepStaleJobs(): Promise<void> {
+    const cutoff = new Date(Date.now() - SCAN_JOB_STALE_MS);
+    const stale = await this.jobs.find({
+      where: [
+        { status: 'running' as ScanJobStatus, updatedAt: LessThan(cutoff) },
+        { status: 'assigned' as ScanJobStatus, updatedAt: LessThan(cutoff) },
+      ],
+      take: 100,
+    });
+    if (stale.length === 0) return;
+    this.logger.warn(`sweeping ${stale.length} stale scan job(s)`);
+    for (const job of stale) {
+      await this.jobs.update(
+        { id: job.id },
+        {
+          status: 'timeout' as ScanJobStatus,
+          statusReason: 'no progress within stale timeout — collector may have died',
+        },
+      );
+      await this.audit.write({
+        tenantId: job.tenantId,
+        actor: 'sweeper',
+        action: 'scan.timeout',
+        entityKind: 'scan_job',
+        entityId: job.id,
+        metadata: {
+          previousStatus: job.status,
+          collectorId: job.collectorId,
+          ageMs: Date.now() - new Date(job.updatedAt).getTime(),
+        },
+      });
+    }
   }
 
   async list(tenantId: string, limit = 50): Promise<ScanJob[]> {

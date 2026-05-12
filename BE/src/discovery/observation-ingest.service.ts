@@ -4,7 +4,21 @@ import { Repository, DataSource } from 'typeorm';
 import { Observation } from './entities/observation.entity';
 import { DiscoverySession } from './entities/discovery-session.entity';
 import { ScanJob } from './entities/scan-job.entity';
+import { AuditLogService } from './audit-log.service';
 import { ScanJobChunkPayload } from './ws/protocol';
+
+/**
+ * Observation attributes that classify a per-device failure. When the
+ * collector emits one of these we mirror it to disc_audit_log so the
+ * operator can grep audit for "credential broke" without trawling the
+ * raw observation stream.
+ */
+const FAILURE_ATTRIBUTES = new Set([
+  'auth_failed',
+  'unreachable',
+  'refused',
+  'ingest_failed',
+]);
 
 /**
  * Batch-inserts observation rows from a ScanJobChunk and bumps the
@@ -26,6 +40,7 @@ export class ObservationIngestService {
     private readonly sessions: Repository<DiscoverySession>,
     @InjectRepository(ScanJob)
     private readonly jobs: Repository<ScanJob>,
+    private readonly audit: AuditLogService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -71,6 +86,31 @@ export class ObservationIngestService {
         rows.length,
       );
     });
+
+    // Mirror classified failures to the audit log. Cheap loop — most
+    // observations are facts, not failures, so the filter passes through
+    // quickly. This is chapter-2 exit-checklist item: "Auth-failure and
+    // unreachable are distinguished in results and audit log."
+    for (const obs of chunk.observations) {
+      if (!FAILURE_ATTRIBUTES.has(obs.attribute)) continue;
+      await this.audit
+        .write({
+          tenantId,
+          actor: `collector:${collectorId}`,
+          action: `device.${obs.attribute}`,
+          entityKind: 'scan_job',
+          entityId: session.scanJobId,
+          metadata: {
+            subjectKey: obs.subjectKey,
+            value: obs.value,
+          },
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `audit write failed for ${obs.attribute}: ${e.message}`,
+          ),
+        );
+    }
   }
 
   /**

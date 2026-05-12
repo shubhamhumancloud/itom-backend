@@ -2,19 +2,28 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Headers,
   Param,
   Post,
   Query,
+  Res,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { TenantId } from '../common/decorators/tenant.decorator';
 import { ScanJobService } from './scan-job.service';
 import { CredentialVaultService } from './credential-vault.service';
 import { CollectorService } from './collector.service';
 import { SigningService } from './signing.service';
+import {
+  CollectorBinaryPatcherService,
+  SupportedArch,
+  SupportedOS,
+} from './collector-binary-patcher.service';
+import { DemoSeedService } from './topology/demo-seed.service';
 import { ScanJobPillar } from './entities/scan-job.entity';
 import { CredentialKind } from './entities/credential.entity';
 
@@ -68,6 +77,8 @@ export class DiscoveryController {
     private readonly vault: CredentialVaultService,
     private readonly collectors: CollectorService,
     private readonly signing: SigningService,
+    private readonly patcher: CollectorBinaryPatcherService,
+    private readonly demoSeed: DemoSeedService,
   ) {}
 
   // --- collectors --------------------------------------------------------
@@ -119,6 +130,92 @@ export class DiscoveryController {
       algorithm: 'ed25519',
       publicKeyBase64: this.signing.getPublicKeyBase64(),
     };
+  }
+
+  // --- demo data ---------------------------------------------------------
+
+  /**
+   * Plant a synthetic 6-device network for the current tenant so the
+   * operator can preview the topology UI without real network gear.
+   * Re-running is safe — fusion is idempotent.
+   */
+  @Post('demo/seed')
+  async seedDemoData(@TenantId() tenantId: string | null) {
+    if (!tenantId) throw new UnauthorizedException('tenant context required');
+    return this.demoSeed.seed(tenantId, 'dashboard');
+  }
+
+  /**
+   * Wipe everything the demo seeder produced — scan jobs, sessions,
+   * observations, fused devices/edges/etc. Scoped strictly to rows
+   * tagged `targetSpec.demo === true`, so real discovery data is
+   * never touched.
+   */
+  @Delete('demo/seed')
+  async clearDemoData(@TenantId() tenantId: string | null) {
+    if (!tenantId) throw new UnauthorizedException('tenant context required');
+    return this.demoSeed.clear(tenantId, 'dashboard');
+  }
+
+  // --- collector binary download ----------------------------------------
+
+  /**
+   * Stream a freshly-patched collector binary. Triggered from the
+   * install one-liner the dashboard generates. The collector row must
+   * exist already (POST /collectors) — its bearer is baked in here.
+   *
+   * Auth model: short-lived install token, the same way the agent flow
+   * works. For now the endpoint also accepts the collector's existing
+   * bearer for re-install/rotation use cases.
+   */
+  @Get('collectors/:id/install/binary')
+  async downloadCollectorBinary(
+    @TenantId() tenantId: string | null,
+    @Param('id') collectorId: string,
+    @Query('os') os: SupportedOS,
+    @Query('arch') arch: SupportedArch,
+    @Query('token') plaintextToken: string,
+    @Res() res: Response,
+  ) {
+    if (!tenantId) throw new UnauthorizedException('tenant context required');
+    if (!os || !arch) {
+      throw new BadRequestException('os and arch query params required');
+    }
+    if (!plaintextToken) {
+      throw new BadRequestException('token query param required');
+    }
+    // Verify the operator still holds the token issued at create time.
+    // verifyToken throws Unauthorized on mismatch.
+    const collector = await this.collectors.verifyToken(
+      collectorId,
+      plaintextToken,
+    );
+    if (collector.tenantId !== tenantId) {
+      throw new ForbiddenException('tenant mismatch');
+    }
+
+    const publicUrl = process.env.ITOM_PUBLIC_URL || '';
+    if (!publicUrl) {
+      throw new BadRequestException(
+        'ITOM_PUBLIC_URL is unset — collector cannot be told where to connect',
+      );
+    }
+
+    const patched = await this.patcher.patch({
+      tenantId,
+      serverUrl: publicUrl,
+      collectorId: collector.id,
+      authToken: plaintextToken,
+      cidrPubKey: this.signing.getPublicKeyBase64(),
+      os,
+      arch,
+    });
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${patched.filename}"`,
+    );
+    res.send(patched.buffer);
   }
 
   // --- scan jobs ---------------------------------------------------------

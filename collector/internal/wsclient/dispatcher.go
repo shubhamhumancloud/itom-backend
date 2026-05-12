@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/itom-mini/collector/internal/cidrguard"
+	"github.com/itom-mini/collector/internal/discovery/active"
 	"github.com/itom-mini/collector/internal/discovery/crawl"
 	"github.com/itom-mini/collector/internal/discovery/device"
 	"github.com/itom-mini/collector/internal/discovery/driver"
@@ -124,6 +125,8 @@ func (d *Dispatcher) Run(
 		// now drives the full seed-and-crawl loop — operators don't
 		// have to declare a single firewall up front anymore.
 		return d.runCrawl(ctx, a, guard, emit)
+	case "active":
+		return d.runActive(ctx, a, guard, emit)
 	case "noop":
 		obs := []wsproto.Observation{{
 			SubjectKind: "sentinel",
@@ -137,8 +140,145 @@ func (d *Dispatcher) Run(
 		}
 		return 1, nil
 	default:
-		return 0, fmt.Errorf("pillar %q not implemented (SNMP/active land in chapters 2-3)", a.Pillar)
+		return 0, fmt.Errorf("pillar %q not implemented", a.Pillar)
 	}
+}
+
+// runActive executes pillar=active — chapter 3. CIDRs to sweep come
+// from the target spec; per-tenant SNMP communities come from the
+// credential the job references (optional).
+func (d *Dispatcher) runActive(
+	ctx context.Context,
+	a wsproto.ScanJobAssign,
+	guard *cidrguard.Guard,
+	emit func(wsproto.ScanJobChunk) error,
+) (int, error) {
+	cidrs := readStringList(a.TargetSpec, "cidrs")
+	if len(cidrs) == 0 {
+		return 0, errors.New("active job: targetSpec.cidrs is required")
+	}
+
+	// SNMP communities — tenant credentials first if supplied, then
+	// optional defaults if the operator explicitly opts in.
+	communities := []string{}
+	if len(a.CredentialIDs) > 0 {
+		creds, err := d.creds.Resolve(ctx, a.TenantID, a.CredentialIDs[0])
+		if err == nil && creds.SNMPCommunity != "" {
+			communities = append(communities, creds.SNMPCommunity)
+		}
+	}
+	if allowDefaults(a.TargetSpec) {
+		communities = append(communities, "public", "private")
+	}
+
+	scanner := &active.Scanner{
+		Log:   d.log,
+		Guard: guard,
+		Emit: func(obs []wsproto.Observation) error {
+			return emit(wsproto.ScanJobChunk{Observations: obs})
+		},
+	}
+
+	cfg := active.Config{
+		Cidrs:           cidrs,
+		Ports:           readIntList(a.TargetSpec, "ports"), // empty → DefaultTopPorts
+		MaxConcurrency:  readInt(a.TargetSpec, "maxConcurrency", 256),
+		RateLimitPPS:    readInt(a.TargetSpec, "rateLimitPps", 1000),
+		SNMPCommunities: communities,
+		SkipMulticast:   readBool(a.TargetSpec, "skipMulticast", false),
+	}
+	d.log.Info("active scan starting",
+		"jobId", a.JobID,
+		"cidrs", cfg.Cidrs,
+		"ratePps", cfg.RateLimitPPS,
+		"workers", cfg.MaxConcurrency,
+		"snmpCommunities", len(communities),
+	)
+	total, stats, err := scanner.Run(ctx, cfg)
+	if err != nil {
+		return total, err
+	}
+	// Per-job summary observation — same shape as crawl emits.
+	summary := wsproto.Observation{
+		SubjectKind: "scan_summary",
+		SubjectKey:  fmt.Sprintf("job:%s", a.JobID),
+		Attribute:   "active_stats",
+		Value: map[string]any{
+			"cidrs":              cfg.Cidrs,
+			"ipsConsidered":      stats.IPsConsidered,
+			"ipsRefusedByCidr":   stats.IPsRefusedByCIDR,
+			"hostsAlive":         stats.HostsAlive,
+			"hostsUnresponsive":  stats.HostsUnresponsive,
+			"openPorts":          stats.OpenPorts,
+			"bannersGrabbed":     stats.BannersGrabbed,
+			"snmpMatches":        stats.SNMPMatches,
+			"multicastResponses": stats.MulticastResponses,
+		},
+		SeenAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := emit(wsproto.ScanJobChunk{Observations: []wsproto.Observation{summary}}); err != nil {
+		return total, err
+	}
+	return total + 1, nil
+}
+
+// readStringList accepts both []any (from JSON) and []string.
+func readStringList(spec map[string]any, key string) []string {
+	if spec == nil {
+		return nil
+	}
+	switch xs := spec[key].(type) {
+	case []any:
+		out := make([]string, 0, len(xs))
+		for _, x := range xs {
+			if s, ok := x.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return xs
+	}
+	return nil
+}
+
+func readIntList(spec map[string]any, key string) []int {
+	if spec == nil {
+		return nil
+	}
+	switch xs := spec[key].(type) {
+	case []any:
+		out := make([]int, 0, len(xs))
+		for _, x := range xs {
+			switch v := x.(type) {
+			case int:
+				out = append(out, v)
+			case float64:
+				out = append(out, int(v))
+			}
+		}
+		return out
+	case []int:
+		return xs
+	}
+	return nil
+}
+
+func readBool(spec map[string]any, key string, def bool) bool {
+	if spec == nil {
+		return def
+	}
+	if v, ok := spec[key].(bool); ok {
+		return v
+	}
+	return def
+}
+
+// allowDefaults gates the "fall back to public/private" behaviour
+// behind an explicit opt-in. Chapter 3 doc: "Try tenant-supplied creds
+// first; only fall back to defaults if explicitly enabled per tenant."
+func allowDefaults(spec map[string]any) bool {
+	return readBool(spec, "snmpAllowDefaults", false)
 }
 
 // runCrawl drives the seed-and-walk loop. Seeds come from the

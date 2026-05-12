@@ -28,15 +28,42 @@ import (
 )
 
 // Config is the input to Open. Zero values are filled with sensible
-// defaults — most callers only need Target + Community.
+// defaults — v2c callers only need Target + Community; v3 callers set
+// Version=Version3 and the V3 fields.
 type Config struct {
 	Target         string
-	Port           uint16              // default 161
-	Community      string              // SNMPv2c shared secret
-	Version        gosnmp.SnmpVersion  // default Version2c
-	Timeout        time.Duration       // per-PDU; default 5s
-	Retries        int                 // default 2
-	MaxRepetitions uint32              // GETBULK page; default 50
+	Port           uint16             // default 161
+	Community      string             // SNMPv2c shared secret
+	Version        gosnmp.SnmpVersion // default Version2c
+	Timeout        time.Duration      // per-PDU; default 5s
+	Retries        int                // default 2
+	MaxRepetitions uint32             // GETBULK page; default 50
+
+	// V3 is the SNMPv3 USM configuration. Ignored unless Version=Version3.
+	V3 V3Config
+
+	// ContextName is the v3 contextName field (used for the Cisco
+	// per-VLAN trick on v3). On v2c it's emulated via "community@vlan-id"
+	// — the driver constructs that and passes the modified community,
+	// not via this field.
+	ContextName string
+
+	// RatePPS caps the requests-per-second one session sends. Token
+	// bucket; 0 means unlimited. Default 50 (chapter-2 politeness rule
+	// for fragile Cisco SMB / MikroTik gear; safe for everything else).
+	RatePPS int
+}
+
+// V3Config holds the SNMPv3 USM parameters. AuthProtocol / PrivProtocol
+// take canonical names — "sha", "sha256", "sha512", "md5" for auth;
+// "aes", "aes192", "aes256", "des" for priv. Empty AuthProtocol means
+// noAuthNoPriv; empty PrivProtocol means authNoPriv.
+type V3Config struct {
+	Username     string
+	AuthProtocol string
+	AuthKey      string
+	PrivProtocol string
+	PrivKey      string
 }
 
 // Runner is the small interface walker functions accept. Production
@@ -74,7 +101,8 @@ const (
 // use only — gosnmp does not support concurrent in-flight requests on
 // one connection.
 type Client struct {
-	g *gosnmp.GoSNMP
+	g        *gosnmp.GoSNMP
+	limiter  *tokenBucket // nil when RatePPS == 0
 }
 
 // ----- typed errors -----
@@ -143,8 +171,14 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.MaxRepetitions == 0 {
 		cfg.MaxRepetitions = 50
 	}
+	if cfg.RatePPS == 0 {
+		cfg.RatePPS = 50
+	}
 	if cfg.Version == gosnmp.Version2c && cfg.Community == "" {
 		return nil, &ErrAuth{Wrapped: errors.New("v2c: community required")}
+	}
+	if cfg.Version == gosnmp.Version3 && cfg.V3.Username == "" {
+		return nil, &ErrAuth{Wrapped: errors.New("v3: username required")}
 	}
 
 	g := &gosnmp.GoSNMP{
@@ -156,6 +190,26 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 		Retries:            cfg.Retries,
 		MaxRepetitions:     cfg.MaxRepetitions,
 		ExponentialTimeout: true,
+		ContextName:        cfg.ContextName,
+	}
+	if cfg.Version == gosnmp.Version3 {
+		usm := &gosnmp.UsmSecurityParameters{
+			UserName: cfg.V3.Username,
+		}
+		flags := gosnmp.NoAuthNoPriv
+		if cfg.V3.AuthProtocol != "" {
+			usm.AuthenticationProtocol = parseAuthProto(cfg.V3.AuthProtocol)
+			usm.AuthenticationPassphrase = cfg.V3.AuthKey
+			flags = gosnmp.AuthNoPriv
+		}
+		if cfg.V3.PrivProtocol != "" {
+			usm.PrivacyProtocol = parsePrivProto(cfg.V3.PrivProtocol)
+			usm.PrivacyPassphrase = cfg.V3.PrivKey
+			flags = gosnmp.AuthPriv
+		}
+		g.SecurityModel = gosnmp.UserSecurityModel
+		g.SecurityParameters = usm
+		g.MsgFlags = flags
 	}
 	// gosnmp doesn't accept a context on Connect (UDP — instantaneous),
 	// but honour cancellation between dial and verify.
@@ -182,9 +236,53 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 	// decides which based on its own evidence.
 	if _, err := g.Get([]string{OIDSysName + ".0"}); err != nil {
 		_ = g.Conn.Close()
+		// On v3 a bad user/auth/priv comes back as a structured PDU
+		// gosnmp surfaces as "unknown user" or similar — classify those
+		// as auth.
+		if c := classify(err); IsAuth(c) {
+			return nil, c
+		}
 		return nil, &ErrUnreachable{Wrapped: err}
 	}
-	return &Client{g: g}, nil
+	c := &Client{g: g}
+	if cfg.RatePPS > 0 {
+		c.limiter = newTokenBucket(cfg.RatePPS)
+	}
+	return c, nil
+}
+
+func parseAuthProto(s string) gosnmp.SnmpV3AuthProtocol {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "md5":
+		return gosnmp.MD5
+	case "sha", "sha1":
+		return gosnmp.SHA
+	case "sha224":
+		return gosnmp.SHA224
+	case "sha256":
+		return gosnmp.SHA256
+	case "sha384":
+		return gosnmp.SHA384
+	case "sha512":
+		return gosnmp.SHA512
+	default:
+		return gosnmp.NoAuth
+	}
+}
+
+func parsePrivProto(s string) gosnmp.SnmpV3PrivProtocol {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "des":
+		return gosnmp.DES
+	case "aes", "aes128":
+		return gosnmp.AES
+	case "aes192":
+		return gosnmp.AES192
+	case "aes256":
+		return gosnmp.AES256
+	default:
+		return gosnmp.NoPriv
+	}
 }
 
 // Close releases the UDP socket. Idempotent.
@@ -204,6 +302,7 @@ func (c *Client) Get(oids []string) (map[string]Value, error) {
 	if len(oids) == 0 {
 		return map[string]Value{}, nil
 	}
+	c.takeToken()
 	res, err := c.g.Get(oids)
 	if err != nil {
 		return nil, classify(err)
@@ -228,6 +327,12 @@ func (c *Client) WalkTable(rootOID string) (map[string]Value, error) {
 	root := normaliseOID(rootOID)
 	out := map[string]Value{}
 	cb := func(pdu gosnmp.SnmpPDU) error {
+		// gosnmp invokes the callback per PDU (a GETBULK page = N PDUs).
+		// We take one token per page-worth of work rather than per
+		// individual PDU because the bucket is sized in PPS terms;
+		// granularity of per-PDU is too aggressive for fragile gear
+		// AND too lax for fast networks. Per-page is the sweet spot.
+		c.takeToken()
 		name := normaliseOID(pdu.Name)
 		suffix := strings.TrimPrefix(name, root+".")
 		// Defensive: BulkWalk should only yield OIDs under root, but
@@ -242,6 +347,14 @@ func (c *Client) WalkTable(rootOID string) (map[string]Value, error) {
 		return nil, classify(err)
 	}
 	return out, nil
+}
+
+// takeToken blocks until the rate limiter allows another request.
+// No-op when the limiter is unset (RatePPS=0 in Config).
+func (c *Client) takeToken() {
+	if c.limiter != nil {
+		c.limiter.take()
+	}
 }
 
 // ----- helpers -----

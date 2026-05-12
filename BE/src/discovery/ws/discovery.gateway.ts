@@ -11,6 +11,7 @@ import { CollectorService } from '../collector.service';
 import { ObservationIngestService } from '../observation-ingest.service';
 import { ScanJobService } from '../scan-job.service';
 import { AuditLogService } from '../audit-log.service';
+import { FusionService } from '../fusion/fusion.service';
 import {
   DISCOVERY_MAX_FRAME_BYTES,
   ErrorPayload,
@@ -71,6 +72,7 @@ export class DiscoveryGateway
     private readonly observations: ObservationIngestService,
     private readonly jobs: ScanJobService,
     private readonly audit: AuditLogService,
+    private readonly fusion: FusionService,
   ) {}
 
   onModuleInit() {
@@ -246,6 +248,20 @@ export class DiscoveryGateway
     await this.jobs
       .markCompleted(msg.jobId, msg.sessionId, msg.observationCount)
       .catch((e) => this.logger.warn(`markCompleted ${msg.jobId} failed: ${e.message}`));
+    // Fire-and-forget fusion. Errors are logged but don't fail the
+    // scan job — fusion is idempotent and runs again on the hourly
+    // cron (when we add it). Off the WS thread so a slow fuse
+    // doesn't block the gateway.
+    this.fusion
+      .fuseSession(msg.sessionId)
+      .then((summary) =>
+        this.logger.log(
+          `fusion ${msg.sessionId}: devices=${summary.devices} edges=${summary.edges} events=${summary.events}`,
+        ),
+      )
+      .catch((e) =>
+        this.logger.error(`fusion ${msg.sessionId} failed: ${e.message}`),
+      );
   }
 
   private async onError(ws: WebSocket, msg: ScanJobErrorPayload) {

@@ -6,6 +6,13 @@ import { Observation } from './entities/observation.entity';
 import { Credential } from './entities/credential.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { Collector } from './entities/collector.entity';
+import { Site } from './entities/site.entity';
+import { Device } from './entities/device.entity';
+import { NetworkInterface } from './entities/network-interface.entity';
+import { IpBinding } from './entities/ip-binding.entity';
+import { NeighborEdge } from './entities/neighbor-edge.entity';
+import { OpenPort } from './entities/open-port.entity';
+import { DiscoveryEvent } from './entities/discovery-event.entity';
 import { CredentialVaultService } from './credential-vault.service';
 import { AuditLogService } from './audit-log.service';
 import { ScanJobService } from './scan-job.service';
@@ -13,30 +20,20 @@ import { CollectorService } from './collector.service';
 import { ObservationIngestService } from './observation-ingest.service';
 import { SigningService } from './signing.service';
 import { ScanJobDispatcherService } from './scan-job-dispatcher.service';
+import { CollectorBinaryPatcherService } from './collector-binary-patcher.service';
+import { FusionService } from './fusion/fusion.service';
+import { TopologyService } from './topology/topology.service';
+import { TopologyController } from './topology/topology.controller';
+import { DemoSeedService } from './topology/demo-seed.service';
 import { DiscoveryController } from './discovery.controller';
 import { DiscoveryGateway } from './ws/discovery.gateway';
 
 /**
- * Discovery module — Chapter 1 (firewall ingest) state.
+ * Discovery module — chapters 0-4 wired.
  *
- * What's here:
- *   - Entities for scan jobs, sessions, observations, credentials,
- *     audit log, and collectors.
- *   - Envelope-encrypted credential vault.
- *   - Ed25519 SigningService for the per-tenant CIDR allowlist.
- *   - Discovery WebSocket gateway at /v1/discovery/ws that talks to
- *     the Go itom-collector daemon.
- *   - Scan-job dispatcher that watches Postgres NOTIFY and pushes
- *     signed ScanJobAssign frames over the gateway.
- *   - ObservationIngestService that batch-inserts ScanJobChunk rows.
- *
- * What's deliberately NOT here yet (comes in Chapters 2-5):
- *   - Typed topology tables (site, subnet, device, interface, nat_rule,
- *     vpn_tunnel, …). Per chapter 1 option (a) we land raw observations
- *     only; fusion → typed rows is parked for chapter 4.
- *   - Postgres Row-Level Security policies (still service-layer
- *     tenant filtering).
- *   - SNMP / active-scan pillars.
+ * Pillars in place: firewall (chapter 1 + chapter 2 SNMP crawl) and
+ * active (chapter 3 sweep). Chapter 4 added the typed topology
+ * tables + fusion service + topology read API + demo seeder.
  */
 @Module({
   imports: [
@@ -47,9 +44,16 @@ import { DiscoveryGateway } from './ws/discovery.gateway';
       Credential,
       AuditLog,
       Collector,
+      Site,
+      Device,
+      NetworkInterface,
+      IpBinding,
+      NeighborEdge,
+      OpenPort,
+      DiscoveryEvent,
     ]),
   ],
-  controllers: [DiscoveryController],
+  controllers: [DiscoveryController, TopologyController],
   providers: [
     CredentialVaultService,
     AuditLogService,
@@ -58,7 +62,11 @@ import { DiscoveryGateway } from './ws/discovery.gateway';
     ObservationIngestService,
     SigningService,
     ScanJobDispatcherService,
+    CollectorBinaryPatcherService,
     DiscoveryGateway,
+    FusionService,
+    TopologyService,
+    DemoSeedService,
   ],
   exports: [
     CredentialVaultService,
@@ -67,6 +75,8 @@ import { DiscoveryGateway } from './ws/discovery.gateway';
     CollectorService,
     SigningService,
     DiscoveryGateway,
+    FusionService,
+    TopologyService,
   ],
 })
 export class DiscoveryModule {}

@@ -160,6 +160,11 @@ export class CredentialVaultService {
     apiKey: string;
     tlsFingerprintSha256: string;
     snmpCommunity: string;
+    snmpv3Username: string;
+    snmpv3AuthProtocol: string;
+    snmpv3AuthKey: string;
+    snmpv3PrivProtocol: string;
+    snmpv3PrivKey: string;
   }> {
     const row = await this.creds.findOneBy({
       id: input.credentialId,
@@ -198,6 +203,37 @@ export class CredentialVaultService {
     const secret = plaintext.toString('utf8');
     plaintext.fill(0);
 
+    // SNMPv3 stores the bundle as a JSON blob (username + authProto +
+    // authKey + privProto + privKey). On createCredential the operator
+    // passes the JSON directly as `plaintext`; here we parse it out so
+    // the collector receives typed fields.
+    let snmpv3 = {
+      username: '',
+      authProtocol: '',
+      authKey: '',
+      privProtocol: '',
+      privKey: '',
+    };
+    if (row.kind === 'snmp_v3') {
+      try {
+        const parsed = JSON.parse(secret);
+        snmpv3 = {
+          username: parsed.username ?? '',
+          authProtocol: parsed.authProtocol ?? '',
+          authKey: parsed.authKey ?? '',
+          privProtocol: parsed.privProtocol ?? '',
+          privKey: parsed.privKey ?? '',
+        };
+      } catch (e: any) {
+        // Bad shape on disk — log and leave fields empty rather than
+        // throwing, so an operator with one bad SNMPv3 row doesn't lose
+        // every other credential their collector needs.
+        this.logger.error(
+          `snmp_v3 credential ${row.id} did not parse as JSON: ${e.message}`,
+        );
+      }
+    }
+
     return {
       host: row.host ?? '',
       username: '',
@@ -205,6 +241,11 @@ export class CredentialVaultService {
       apiKey: row.kind === 'firewall_api_key' ? secret : '',
       tlsFingerprintSha256: row.tlsFingerprintSha256 ?? '',
       snmpCommunity: row.kind === 'snmp_v2c' ? secret : '',
+      snmpv3Username: snmpv3.username,
+      snmpv3AuthProtocol: snmpv3.authProtocol,
+      snmpv3AuthKey: snmpv3.authKey,
+      snmpv3PrivProtocol: snmpv3.privProtocol,
+      snmpv3PrivKey: snmpv3.privKey,
     };
   }
 

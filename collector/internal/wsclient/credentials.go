@@ -74,6 +74,11 @@ func (r *HTTPCredentialResolver) Resolve(
 		APIKey               string `json:"apiKey"`
 		TLSFingerprintSHA256 string `json:"tlsFingerprintSha256"`
 		SNMPCommunity        string `json:"snmpCommunity"`
+		SNMPv3Username       string `json:"snmpv3Username"`
+		SNMPv3AuthProtocol   string `json:"snmpv3AuthProtocol"`
+		SNMPv3AuthKey        string `json:"snmpv3AuthKey"`
+		SNMPv3PrivProtocol   string `json:"snmpv3PrivProtocol"`
+		SNMPv3PrivKey        string `json:"snmpv3PrivKey"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return device.Creds{}, fmt.Errorf("decode credential: %w", err)
@@ -85,5 +90,10 @@ func (r *HTTPCredentialResolver) Resolve(
 		APIKey:               out.APIKey,
 		TLSFingerprintSHA256: out.TLSFingerprintSHA256,
 		SNMPCommunity:        out.SNMPCommunity,
+		SNMPv3Username:       out.SNMPv3Username,
+		SNMPv3AuthProtocol:   out.SNMPv3AuthProtocol,
+		SNMPv3AuthKey:        out.SNMPv3AuthKey,
+		SNMPv3PrivProtocol:   out.SNMPv3PrivProtocol,
+		SNMPv3PrivKey:        out.SNMPv3PrivKey,
 	}, nil
 }

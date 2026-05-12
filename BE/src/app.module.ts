@@ -31,6 +31,13 @@ import { Observation } from './discovery/entities/observation.entity';
 import { Credential } from './discovery/entities/credential.entity';
 import { AuditLog } from './discovery/entities/audit-log.entity';
 import { Collector } from './discovery/entities/collector.entity';
+import { Site } from './discovery/entities/site.entity';
+import { Device } from './discovery/entities/device.entity';
+import { NetworkInterface } from './discovery/entities/network-interface.entity';
+import { IpBinding } from './discovery/entities/ip-binding.entity';
+import { NeighborEdge } from './discovery/entities/neighbor-edge.entity';
+import { OpenPort } from './discovery/entities/open-port.entity';
+import { DiscoveryEvent } from './discovery/entities/discovery-event.entity';
 
 @Module({
   imports: [
@@ -63,6 +70,13 @@ import { Collector } from './discovery/entities/collector.entity';
         Credential,
         AuditLog,
         Collector,
+        Site,
+        Device,
+        NetworkInterface,
+        IpBinding,
+        NeighborEdge,
+        OpenPort,
+        DiscoveryEvent,
       ],
       synchronize: true,
       logging: process.env.DB_LOGGING === 'true',

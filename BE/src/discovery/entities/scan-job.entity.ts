@@ -8,6 +8,11 @@ import {
 } from 'typeorm';
 
 export type ScanJobPillar = 'noop' | 'firewall' | 'snmp' | 'active';
+// 'firewall' covers chapter-1 firewall ingest AND the chapter-2 SNMP
+// seed-and-crawl behind one pillar (the dispatcher's crawl loop
+// figures out vendor per device). 'active' is the chapter-3 active
+// sweep. 'snmp' is reserved for a future pure-SNMP pillar separate
+// from the firewall crawl.
 export type ScanJobStatus =
   | 'queued'
   | 'assigned'

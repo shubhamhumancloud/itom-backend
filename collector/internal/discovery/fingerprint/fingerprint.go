@@ -112,9 +112,9 @@ func Identify(ctx context.Context, host string, creds device.Creds, opts Options
 	fp.TLSIssuer = tlsIss
 	fp.HTTPServer = httpSrv
 	fp.SSHBanner = sshBan
-	// 5. SNMP sysObjectID — runs only if a community was supplied.
-	// Authoritative signal when it lands (per-vendor IANA OID prefix).
-	fp.SysObjectID = probeSNMPSysObjectID(ctx, host, creds.SNMPCommunity, opts.PerProbeTimeout)
+	// 5. SNMP sysObjectID — runs only if SNMP credentials (v2c or v3)
+	// were supplied. Authoritative signal when it lands.
+	fp.SysObjectID = probeSNMPSysObjectID(ctx, host, creds, opts.PerProbeTimeout)
 
 	fp.Vendor, fp.Confidence, fp.Reasons = score(fp)
 	return fp, ctx.Err()
