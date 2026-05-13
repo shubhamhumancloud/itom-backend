@@ -15,7 +15,11 @@ import (
 	"github.com/itom-mini/collector/internal/discovery/device"
 	"github.com/itom-mini/collector/internal/discovery/driver"
 	"github.com/itom-mini/collector/internal/discovery/drivers/generic_snmp"
+	"github.com/itom-mini/collector/internal/discovery/firewall/checkpoint"
+	"github.com/itom-mini/collector/internal/discovery/firewall/cisco_asa"
 	"github.com/itom-mini/collector/internal/discovery/firewall/fortigate"
+	"github.com/itom-mini/collector/internal/discovery/firewall/paloalto"
+	"github.com/itom-mini/collector/internal/discovery/firewall/sophos"
 	"github.com/itom-mini/collector/internal/wsproto"
 )
 
@@ -84,12 +88,14 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 
 	reg := driver.New()
 	reg.MustRegister(device.VendorFortiGate, fortigate.Factory)
+	reg.MustRegister(device.VendorPaloAlto, paloalto.Factory)
+	reg.MustRegister(device.VendorCiscoASA, cisco_asa.Factory)
+	reg.MustRegister(device.VendorCheckPoint, checkpoint.Factory)
+	reg.MustRegister(device.VendorSophos, sophos.Factory)
 	reg.MustRegister(device.VendorGenericSNMP, generic_snmp.Factory)
 	// Cisco IOS — currently routed through generic_snmp; will get its
 	// own driver when we add the per-VLAN community trick.
 	reg.MustRegister(device.VendorCiscoIOS, generic_snmp.Factory)
-	// Future chapters plug in here:
-	//   reg.MustRegister(device.VendorPaloAlto, paloalto.Factory)
 
 	return &Dispatcher{
 		log:           cfg.Logger,

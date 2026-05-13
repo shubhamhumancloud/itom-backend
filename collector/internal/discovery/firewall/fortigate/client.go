@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itom-mini/collector/internal/discovery/firewall"
 )
 
 // httpClient is a thin wrapper around net/http that handles:
@@ -150,12 +152,19 @@ func (c *httpClient) do(ctx context.Context, method, u string, dst any) error {
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20)) // 16 MiB cap
 	if resp.StatusCode/100 != 2 {
-		return &apiError{
+		apiErr := &apiError{
 			Method:     method,
 			URL:        u,
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
 		}
+		// 401 means "credential rotated/revoked". Wrap with the shared
+		// firewall.AuthError so the generic driver adapter (and any
+		// other firewall.IsAuth caller) can short-circuit the job.
+		if resp.StatusCode == http.StatusUnauthorized {
+			return &firewall.AuthError{Wrapped: apiErr}
+		}
+		return apiErr
 	}
 	if dst == nil {
 		return nil
@@ -199,9 +208,11 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("fortigate %s %s -> %d: %s", e.Method, e.URL, e.StatusCode, truncate(e.Body, 256))
 }
 
-// IsAuth reports whether the error was an HTTP 401. Used by the
-// dispatcher to short-circuit retries on a rotated key.
-func IsAuth(err error) bool {
+// isFortigateAPIAuthErr reports whether the underlying transport error
+// is a 401 from the FortiGate REST API. Used internally for messaging
+// — the canonical "is this auth?" check at the package boundary uses
+// firewall.IsAuth which understands *firewall.AuthError.
+func isFortigateAPIAuthErr(err error) bool {
 	var ae *apiError
 	if errors.As(err, &ae) {
 		return ae.StatusCode == http.StatusUnauthorized

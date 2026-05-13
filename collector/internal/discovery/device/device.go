@@ -31,6 +31,7 @@ const (
 	VendorPaloAlto   Vendor = "paloalto"
 	VendorCheckPoint Vendor = "checkpoint"
 	VendorCiscoASA   Vendor = "cisco_asa"
+	VendorSophos     Vendor = "sophos"
 	VendorCiscoIOS   Vendor = "cisco_ios"
 	VendorJuniperOS  Vendor = "juniper_junos"
 	VendorGenericSNMP Vendor = "generic_snmp"

@@ -155,4 +155,5 @@ const (
 	VendorPaloAlto   Vendor = "paloalto"
 	VendorCheckPoint Vendor = "checkpoint"
 	VendorCiscoASA   Vendor = "cisco_asa"
+	VendorSophos     Vendor = "sophos"
 )

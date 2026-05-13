@@ -122,6 +122,20 @@ export class DiscoveryController {
     }));
   }
 
+  /**
+   * Hard-delete a collector and the scan jobs / sessions / observations
+   * it produced. Will refuse if the collector is `online` — stop the
+   * daemon first.
+   */
+  @Delete('collectors/:id')
+  async deleteCollector(
+    @TenantId() tenantId: string | null,
+    @Param('id') id: string,
+  ) {
+    if (!tenantId) throw new UnauthorizedException('tenant context required');
+    return this.collectors.delete(tenantId, id);
+  }
+
   // --- signing pubkey ----------------------------------------------------
 
   @Get('signing/public-key')

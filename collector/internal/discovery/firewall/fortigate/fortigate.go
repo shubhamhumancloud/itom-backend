@@ -54,8 +54,8 @@ func (f *Ingestor) Login(ctx context.Context, creds firewall.Creds) error {
 	// Cheap auth probe: pull the system status. If this fails 401 we
 	// abort the whole job; if it fails 5xx the caller can retry.
 	if err := f.c.get(ctx, "/api/v2/monitor/system/status", "root", nil); err != nil {
-		if IsAuth(err) {
-			return fmt.Errorf("fortigate: token rejected (rotate the api-user key): %w", err)
+		if firewall.IsAuth(err) {
+			return &firewall.AuthError{Wrapped: fmt.Errorf("fortigate: token rejected (rotate the api-user key): %w", err)}
 		}
 		return err
 	}

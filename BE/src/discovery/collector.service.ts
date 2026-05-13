@@ -1,12 +1,16 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { Collector } from './entities/collector.entity';
+import { ScanJob } from './entities/scan-job.entity';
+import { DiscoverySession } from './entities/discovery-session.entity';
+import { Observation } from './entities/observation.entity';
 
 /**
  * Collector CRUD + auth-token verification. The dashboard creates a
@@ -20,6 +24,14 @@ export class CollectorService {
   constructor(
     @InjectRepository(Collector)
     private readonly repo: Repository<Collector>,
+    @InjectRepository(ScanJob)
+    private readonly jobs: Repository<ScanJob>,
+    @InjectRepository(DiscoverySession)
+    private readonly sessions: Repository<DiscoverySession>,
+    @InjectRepository(Observation)
+    private readonly observations: Repository<Observation>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(input: {
@@ -88,6 +100,69 @@ export class CollectorService {
     const row = await this.getOne(tenantId, id);
     row.allowedCidrs = cidrs;
     return this.repo.save(row);
+  }
+
+  /**
+   * Delete a collector and every observation / session / scan-job it
+   * produced. We refuse to delete an `online` collector — bring it
+   * down first (operators have to know the daemon was stopped). Typed
+   * device / interface / edge / open-port rows are LEFT IN PLACE: a
+   * device can be fused from observations across multiple collectors,
+   * and deleting it here would corrupt the typed graph.
+   *
+   * If the operator wants to wipe the topology too, they should use
+   * the demo-clear endpoint (which is scoped to demo-seed jobs) or
+   * delete the device rows directly.
+   */
+  async delete(tenantId: string, id: string): Promise<{
+    scanJobs: number;
+    sessions: number;
+    observations: number;
+  }> {
+    const row = await this.getOne(tenantId, id);
+    if (row.status === 'online') {
+      throw new BadRequestException(
+        'cannot delete an online collector — stop the daemon (or wait for it to time out) first',
+      );
+    }
+
+    // 1) Find every scan-job the collector produced.
+    const jobs = await this.jobs.find({
+      where: { tenantId, collectorId: id },
+      select: ['id'],
+    });
+    const jobIds = jobs.map((j) => j.id);
+
+    // 2) Find every session those jobs produced (plus any direct sessions
+    //    on the collector — early bootstrap path emitted some).
+    const sessionsByJob = jobIds.length
+      ? await this.sessions.find({ where: { scanJobId: In(jobIds) }, select: ['id'] })
+      : [];
+    const sessionsByCol = await this.sessions.find({
+      where: { tenantId, collectorId: id },
+      select: ['id'],
+    });
+    const sessionIds = Array.from(
+      new Set([...sessionsByJob.map((s) => s.id), ...sessionsByCol.map((s) => s.id)]),
+    );
+
+    // 3) Cascade-delete observations → sessions → jobs → collector.
+    let obsDeleted = 0;
+    if (sessionIds.length > 0) {
+      const r = await this.observations.delete({ sessionId: In(sessionIds) });
+      obsDeleted = r.affected ?? 0;
+      await this.sessions.delete({ id: In(sessionIds) });
+    }
+    if (jobIds.length > 0) {
+      await this.jobs.delete({ id: In(jobIds) });
+    }
+    await this.repo.delete({ id, tenantId });
+
+    return {
+      scanJobs: jobIds.length,
+      sessions: sessionIds.length,
+      observations: obsDeleted,
+    };
   }
 }
 

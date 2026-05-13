@@ -56,8 +56,8 @@ unprivileged default.
    ┌─────────────┐                              ┌──────────────────────┐
    │ Firewall    │◄── HTTPS read-only ──┐       │ NestJS               │
    │ (FortiGate, │                      │       │  POST /scans         │
-   │  PAN, CP,   │                      │       │   ↓ NOTIFY           │
-   │  ASA*)      │                      │       │  Dispatcher          │
+   │  PAN-OS,    │                      │       │   ↓ NOTIFY           │
+   │  ASA, CP)   │                      │       │  Dispatcher          │
    └─────────────┘                      │       │   ↓ sign allowlist   │
                                         │       │   ↓ scan_job.assign  │
    ┌─────────────┐                      │       │      │               │
@@ -87,10 +87,12 @@ unprivileged default.
                   │             ▼                ││                  │ │
                   │  ┌────────────────────────┐  │└────┬─────────────┘ │
                   │  │ driver registry        │  │     │               │
-                  │  │   fortigate → REST     │  │     ▼ typed rows    │
-                  │  │   generic_snmp → v2c/v3│  │┌──────────────────┐ │
-                  │  │   cisco_ios → snmp+VLAN│  ││ Postgres (typed) │ │
-                  │  │   (palo, cp, asa: TBD) │  ││  disc_device     │ │
+                  │  │   fortigate  → REST    │  │     ▼ typed rows    │
+                  │  │   paloalto   → XML API │  │┌──────────────────┐ │
+                  │  │   cisco_asa  → REST    │  ││ Postgres (typed) │ │
+                  │  │   checkpoint → mgmt API│  ││  disc_device     │ │
+                  │  │   sophos     → XML :4444│ ││                  │ │
+                  │  │   generic_snmp → v2c/v3│  ││                  │ │
                   │  └──────────┬─────────────┘  ││  disc_iface      │ │
                   │             ▼                ││  disc_ip_binding │ │
                   │  ┌────────────────────────┐  ││  disc_neighbor   │ │
@@ -144,15 +146,28 @@ EVE-NG / GNS3 / hardware) are flagged ⚠️.
 ### Chapter 1 — Firewall ingestor
 
 - [x] Vendor-neutral `device.Driver` interface
+- [x] Shared `firewall.GenericDriver` adapter (one `firewall.Ingestor`
+      per vendor → automatic observation mapping + neighbour hints)
 - [x] FortiGate REST driver (interfaces, routes, ARP, NAT,
       zones, policies, IPsec, BGP, OSPF)
+- [x] **Palo Alto PAN-OS** driver (XML API: interfaces, routes, ARP,
+      NAT policy, zones, security policy, IPsec, BGP, OSPF)
+- [x] **Cisco ASA** driver (REST API: physical/VLAN interfaces, ARP,
+      monitoring routes + static routes, twice-NAT, ACLs, IPsec,
+      BGP/OSPF best-effort)
+- [x] **Check Point R80+** driver (Management API: gateway interfaces,
+      access rulebase, NAT rulebase, security zones, VPN communities)
+- [x] **Sophos Firewall (SFOS 18.x+)** driver (XML API on :4444:
+      interfaces, zones, firewall rules, NAT rules, IPsec, BGP, OSPF,
+      static routes)
 - [x] Observations stream via `scan_job.chunk`
 - [x] **Fingerprint probe ladder** (TCP/TLS/SSH/HTTP)
 - [x] **Seed-and-crawl loop** (per-customer perimeter shape)
-- [ ] Palo Alto driver
-- [ ] Check Point driver
-- [ ] Cisco ASA driver (SSH scraping via scrapligo)
-- [ ] ⚠️ Lab tests: subnet count, VPN tunnel edge, multi-VDOM, DNAT
+- [ ] Check Point per-gateway Gaia REST for runtime ARP/routes
+      (management API only exposes config)
+- [ ] Cisco ASA SSH/CLI fallback for boxes where REST is disabled
+- [ ] ⚠️ Lab tests: subnet count, VPN tunnel edge, multi-VDOM,
+      multi-vsys, multi-context ASA, multi-domain Check Point
 
 ### Chapter 2 — SNMP crawler
 
@@ -382,8 +397,12 @@ backend/collector/
         ├── active/                 chapter 3 — CIDR sweep + 5-stage probe
         ├── snmp/                   gosnmp wrapper + OIDs + rate limit
         ├── snmp/walkers/           one file per MIB table
-        ├── firewall/               legacy firewall.Ingestor + payload types
+        ├── firewall/               firewall.Ingestor + payload types + generic driver adapter
         ├── firewall/fortigate/     FortiOS 7.2+ REST driver
+        ├── firewall/paloalto/      PAN-OS 10.x XML API driver
+        ├── firewall/cisco_asa/     Cisco ASA 9.6+ REST driver
+        ├── firewall/checkpoint/    Check Point R80+ Management REST driver
+        ├── firewall/sophos/        Sophos Firewall SFOS 18.x+ XML API driver
         └── drivers/
             └── generic_snmp/       generic SNMP driver (used for Cisco IOS too)
 ```

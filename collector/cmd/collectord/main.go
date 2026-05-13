@@ -63,14 +63,16 @@ var (
 		"__________" + "__________" + "__________" + "__________" + "_" // 41 → 64
 
 	bakedAuthToken = "ITOMBAKED_COLLECTOR_AUTH:" + // 25
-		"__________" + "__________" + "__________" + "_______" + // 64 → 89
-		"__________" + "__________" + "__________" + "_________" // 128
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 75
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 125
+		"___" // 128
 	// Auth token = 64 hex chars; this slot leaves room for a longer
 	// future format (JWT, signed bearer) without binary surgery.
 
 	bakedCIDRPubKey = "ITOMBAKED_CIDR_PUBKEY:" + // 22
 		"__________" + "__________" + "__________" + "__________" + "__________" + // 72
-		"__________" + "__________" + "__________" + "__________" + "________" // 130
+		"__________" + "__________" + "__________" + "__________" + "__________" + // 122
+		"________" // 130
 	// Ed25519 public key is 32 bytes → 44 base64 chars; the 130-byte
 	// slot is intentional padding so we can swap to a longer signature
 	// scheme later without re-baking templates.

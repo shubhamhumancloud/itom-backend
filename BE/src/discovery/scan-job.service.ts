@@ -69,10 +69,15 @@ export class ScanJobService {
     // Wake the dispatcher service. Payload is just the job id (Postgres
     // NOTIFY truncates above 8 KiB and we don't need anything else —
     // the dispatcher SELECTs the row to read the rest).
-    await this.dataSource.query(
-      `NOTIFY ${SCAN_JOB_NOTIFY_CHANNEL}, $1`,
-      [saved.id],
-    );
+    //
+    // `NOTIFY` is a Postgres utility command, not a query, so the
+    // wire-protocol bind step doesn't apply — `$1` is a syntax error
+    // there. Use `pg_notify(channel, payload)` instead; it's a regular
+    // function and accepts parameter binding normally.
+    await this.dataSource.query(`SELECT pg_notify($1, $2)`, [
+      SCAN_JOB_NOTIFY_CHANNEL,
+      saved.id,
+    ]);
     return saved;
   }
 
