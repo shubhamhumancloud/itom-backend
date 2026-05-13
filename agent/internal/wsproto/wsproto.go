@@ -15,7 +15,6 @@ const (
 	TypeProcesses         = "processes"
 	TypeBattery           = "battery"
 	TypeSensors           = "sensors"
-	TypeDiskHealth        = "disk_health"
 	TypeGPU               = "gpu"
 	TypeSoftwareInventory = "software_inventory"
 	TypeBye               = "bye"
@@ -58,13 +57,6 @@ type Sensors struct {
 	RequestID string                    `json:"requestId"`
 	Timestamp string                    `json:"timestamp"`
 	Readings  []collector.SensorReading `json:"readings"`
-}
-
-type DiskHealthMsg struct {
-	Type      string                  `json:"type"`
-	RequestID string                  `json:"requestId"`
-	Timestamp string                  `json:"timestamp"`
-	Drives    []collector.DriveHealth `json:"drives"`
 }
 
 type GPU struct {

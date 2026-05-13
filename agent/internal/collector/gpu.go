@@ -3,75 +3,72 @@ package collector
 import (
 	"context"
 	"errors"
-	"os/exec"
-	"strconv"
 	"strings"
-	"time"
 )
 
-// CollectGPU shells out to `nvidia-smi` and parses CSV output. NVIDIA only.
-// On hosts without nvidia-smi (most laptops, AMD/Intel-only machines, all
-// macOS) we return ErrNoGPU and the caller skips emitting a frame.
+// ErrNoGPU is returned when no GPU could be discovered on the host. Callers
+// should treat it as a non-error (skip emitting a frame, no alert) — it's the
+// expected outcome on cloud VMs, locked-down corp boxes, etc.
+var ErrNoGPU = errors.New("no gpu detected")
+
+// CollectGPU returns inventory + live metrics for every GPU on the host.
 //
-// We pin specific query columns and parse them positionally — much safer
-// than parsing the human-readable nvidia-smi output.
-var ErrNoGPU = errors.New("no nvidia gpu detected")
-
-const nvidiaSMIQuery = "index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw"
-
+// Inventory (Tier 1) is collected on every platform via OS-native APIs:
+//   - macOS:   system_profiler SPDisplaysDataType
+//   - Windows: WMI Win32_VideoController
+//   - Linux:   /sys/class/drm + lspci
+//
+// Live metrics (Tier 2) — utilization / VRAM used / temperature / power —
+// are overlaid by best-effort vendor tools when present:
+//   - NVIDIA cards on any OS: nvidia-smi
+//   - AMD ROCm cards on Linux/Windows: rocm-smi
+//   - Apple Silicon on macOS: powermetrics
+//   - Intel: deliberately skipped (requires root + intel_gpu_top; low value)
+//
+// Returns the union: every detected GPU plus whatever metrics we could
+// gather. If no GPU is detected at all, returns ErrNoGPU.
 func CollectGPU(ctx context.Context) ([]GPUSample, error) {
-	if _, err := exec.LookPath("nvidia-smi"); err != nil {
+	samples := collectGPUInventory(ctx)
+	if len(samples) == 0 {
 		return nil, ErrNoGPU
 	}
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(cctx,
-		"nvidia-smi",
-		"--query-gpu="+nvidiaSMIQuery,
-		"--format=csv,noheader,nounits",
-	)
-	raw, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var out []GPUSample
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if line == "" {
-			continue
-		}
-		fields := splitCSV(line)
-		if len(fields) < 7 {
-			continue
-		}
-		idx, _ := strconv.Atoi(fields[0])
-		util, _ := strconv.ParseFloat(fields[2], 64)
-		memUsedMB, _ := strconv.ParseFloat(fields[3], 64)
-		memTotalMB, _ := strconv.ParseFloat(fields[4], 64)
-		temp, _ := strconv.ParseFloat(fields[5], 64)
-		power, _ := strconv.ParseFloat(fields[6], 64)
-
-		out = append(out, GPUSample{
-			Index:              idx,
-			Name:               fields[1],
-			UtilizationPercent: util,
-			MemoryUsedBytes:    uint64(memUsedMB * 1024 * 1024),
-			MemoryTotalBytes:   uint64(memTotalMB * 1024 * 1024),
-			TemperatureC:       temp,
-			PowerWatts:         power,
-		})
-	}
-	if len(out) == 0 {
-		return nil, ErrNoGPU
-	}
-	return out, nil
+	overlayGPULiveMetrics(ctx, samples)
+	return samples, nil
 }
 
+// splitCSV splits a CSV line on commas and trims each field. Shared by the
+// nvidia-smi and rocm-smi overlays.
 func splitCSV(line string) []string {
 	parts := strings.Split(line, ",")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
+}
+
+// vendorFromName classifies a GPU by its model string. Used by every OS path
+// when more specific signals (PCI ID, signed vendor) aren't available.
+func vendorFromName(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "nvidia"), strings.Contains(n, "geforce"),
+		strings.Contains(n, "quadro"), strings.Contains(n, "tesla"),
+		strings.Contains(n, "rtx"), strings.Contains(n, "gtx"):
+		return "nvidia"
+	case strings.Contains(n, "amd"), strings.Contains(n, "radeon"),
+		strings.Contains(n, "instinct"):
+		return "amd"
+	case strings.Contains(n, "intel"), strings.Contains(n, "iris"),
+		strings.Contains(n, "uhd graphics"), strings.Contains(n, "arc "):
+		return "intel"
+	case strings.Contains(n, "apple m"), strings.HasPrefix(n, "apple ") &&
+		!strings.Contains(n, "apple software"):
+		return "apple"
+	case strings.Contains(n, "qualcomm"), strings.Contains(n, "adreno"):
+		return "qualcomm"
+	case strings.Contains(n, "virtio"), strings.Contains(n, "vmware"),
+		strings.Contains(n, "virtual"), strings.Contains(n, "qxl"):
+		return "virtual"
+	}
+	return "unknown"
 }

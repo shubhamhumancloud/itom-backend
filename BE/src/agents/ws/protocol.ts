@@ -91,25 +91,9 @@ export interface SensorReading {
   value: number;
 }
 
-// SMART disk health — every 30 min, plus immediately on change.
-export interface DiskHealthMsg {
-  type: 'disk_health';
-  requestId: string;
-  timestamp: string;
-  drives: DriveHealth[];
-}
-export interface DriveHealth {
-  device: string;
-  model?: string;
-  status: 'healthy' | 'warning' | 'failing' | 'unknown';
-  predictedFailure: boolean;
-  temperatureC?: number;
-  powerOnHours?: number;
-  reallocatedSectors?: number;
-  wearLevelingPercent?: number; // SSD only
-}
-
-// GPU — every 60 s, NVIDIA only via nvidia-smi.
+// GPU — every 60 s. Inventory fields work on every platform; live metrics
+// (util/mem/temp/power) are populated when a vendor tool is available
+// (nvidia-smi, rocm-smi, powermetrics on Apple Silicon).
 export interface GpuMsg {
   type: 'gpu';
   requestId: string;
@@ -119,6 +103,11 @@ export interface GpuMsg {
 export interface GpuSample {
   index: number;
   name: string;
+  // 'nvidia' | 'amd' | 'intel' | 'apple' | 'qualcomm' | 'virtual' | 'unknown'
+  vendor?: string;
+  driverVersion?: string;
+  // 'integrated' | 'discrete' | 'egpu' | 'virtual' | 'unknown'
+  slotType?: string;
   utilizationPercent: number;
   memoryUsedBytes: number;
   memoryTotalBytes: number;
@@ -152,7 +141,6 @@ export type ClientMsg =
   | ProcessesMsg
   | BatteryMsg
   | SensorsMsg
-  | DiskHealthMsg
   | GpuMsg
   | SoftwareInventoryMsg
   | ByeMsg;

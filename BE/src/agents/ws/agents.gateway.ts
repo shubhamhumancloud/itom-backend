@@ -158,7 +158,6 @@ export class AgentsGateway
       case 'processes':
       case 'battery':
       case 'sensors':
-      case 'disk_health':
       case 'gpu':
       case 'software_inventory':
         return this.onObservability(ws, parsed);
@@ -184,9 +183,6 @@ export class AgentsGateway
           break;
         case 'sensors':
           await this.obs.ingestSensors(agentId, msg);
-          break;
-        case 'disk_health':
-          await this.obs.ingestDiskHealth(agentId, msg);
           break;
         case 'gpu':
           await this.obs.ingestGpu(agentId, msg);

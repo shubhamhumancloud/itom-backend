@@ -59,17 +59,6 @@ export class ObservabilityController {
     return this.obs.sensorHistory(agentId, kind, parseInt(limit, 10));
   }
 
-  // ---------- SMART disk health ----------
-
-  @Get('disk-health')
-  async diskHealth(
-    @Param('agentId') agentId: string,
-    @TenantId() tenantId: string | null,
-  ) {
-    if (!(await this.canRead(agentId, tenantId))) return [];
-    return this.obs.latestDiskHealth(agentId);
-  }
-
   // ---------- GPU ----------
 
   @Get('gpu')

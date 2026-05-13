@@ -26,6 +26,17 @@ export class GpuMetric {
   @Column()
   name: string;
 
+  // 'nvidia' | 'amd' | 'intel' | 'apple' | 'qualcomm' | 'virtual' | 'unknown'
+  @Column({ nullable: true })
+  vendor: string | null;
+
+  @Column({ nullable: true })
+  driverVersion: string | null;
+
+  // 'integrated' | 'discrete' | 'egpu' | 'virtual' | 'unknown'
+  @Column({ nullable: true })
+  slotType: string | null;
+
   @Column({ type: 'numeric', precision: 5, scale: 2 })
   utilizationPercent: number;
 

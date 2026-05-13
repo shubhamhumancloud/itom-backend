@@ -21,7 +21,6 @@ import { ObservabilityModule } from './observability/observability.module';
 import { ProcessMetric } from './observability/entities/process-metric.entity';
 import { BatteryMetric } from './observability/entities/battery-metric.entity';
 import { SensorMetric } from './observability/entities/sensor-metric.entity';
-import { DiskHealth } from './observability/entities/disk-health.entity';
 import { GpuMetric } from './observability/entities/gpu-metric.entity';
 import { SoftwareItem } from './observability/entities/software-item.entity';
 import { DiscoveryModule } from './discovery/discovery.module';
@@ -61,7 +60,6 @@ import { DiscoveryEvent } from './discovery/entities/discovery-event.entity';
         ProcessMetric,
         BatteryMetric,
         SensorMetric,
-        DiskHealth,
         GpuMetric,
         SoftwareItem,
         ScanJob,

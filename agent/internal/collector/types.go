@@ -32,20 +32,14 @@ type SensorReading struct {
 	Value float64 `json:"value"`
 }
 
-type DriveHealth struct {
-	Device              string  `json:"device"`
-	Model               string  `json:"model,omitempty"`
-	Status              string  `json:"status"`
-	PredictedFailure    bool    `json:"predictedFailure"`
-	TemperatureC        float64 `json:"temperatureC,omitempty"`
-	PowerOnHours        int     `json:"powerOnHours,omitempty"`
-	ReallocatedSectors  int     `json:"reallocatedSectors,omitempty"`
-	WearLevelingPercent float64 `json:"wearLevelingPercent,omitempty"`
-}
-
 type GPUSample struct {
 	Index              int     `json:"index"`
 	Name               string  `json:"name"`
+	// Vendor: "nvidia" | "amd" | "intel" | "apple" | "qualcomm" | "virtual" | "unknown"
+	Vendor             string  `json:"vendor,omitempty"`
+	DriverVersion      string  `json:"driverVersion,omitempty"`
+	// SlotType: "integrated" | "discrete" | "egpu" | "virtual" | "unknown"
+	SlotType           string  `json:"slotType,omitempty"`
 	UtilizationPercent float64 `json:"utilizationPercent"`
 	MemoryUsedBytes    uint64  `json:"memoryUsedBytes"`
 	MemoryTotalBytes   uint64  `json:"memoryTotalBytes"`

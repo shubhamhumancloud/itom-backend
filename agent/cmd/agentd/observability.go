@@ -20,7 +20,6 @@ const (
 	procInterval     = 60 * time.Second
 	batteryInterval  = 5 * time.Minute
 	sensorsInterval  = 60 * time.Second
-	smartInterval    = 30 * time.Minute
 	gpuInterval      = 60 * time.Second
 	softwareInterval = 24 * time.Hour
 
@@ -97,32 +96,6 @@ func startObservability(
 			RequestID: reqID,
 			Timestamp: nowISO(),
 			Readings:  readings,
-		}, obsAckTimeout)
-		return err
-	})
-
-	// SMART disk health — every 30 min. Skip after one failure (binary missing).
-	smartUnavailable := false
-	wg.Add(1)
-	go runLoop(ctx, wg, log, "disk_health", smartInterval, func() error {
-		if smartUnavailable || !wsc.IsConnected() {
-			return nil
-		}
-		drives, err := collector.CollectDiskHealth(ctx)
-		if errors.Is(err, collector.ErrSmartctlMissing) {
-			smartUnavailable = true
-			log.Info("smartctl not installed; SMART checks disabled")
-			return nil
-		}
-		if err != nil || len(drives) == 0 {
-			return err
-		}
-		reqID := uuid.NewString()
-		_, err = wsc.SendAcked(ctx, reqID, wsproto.DiskHealthMsg{
-			Type:      wsproto.TypeDiskHealth,
-			RequestID: reqID,
-			Timestamp: nowISO(),
-			Drives:    drives,
 		}, obsAckTimeout)
 		return err
 	})

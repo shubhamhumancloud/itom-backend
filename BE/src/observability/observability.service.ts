@@ -4,12 +4,10 @@ import { In, LessThan, Repository } from 'typeorm';
 import { ProcessMetric } from './entities/process-metric.entity';
 import { BatteryMetric } from './entities/battery-metric.entity';
 import { SensorMetric } from './entities/sensor-metric.entity';
-import { DiskHealth } from './entities/disk-health.entity';
 import { GpuMetric } from './entities/gpu-metric.entity';
 import { SoftwareItem } from './entities/software-item.entity';
 import {
   BatteryMsg,
-  DiskHealthMsg,
   GpuMsg,
   ProcessesMsg,
   SensorsMsg,
@@ -27,8 +25,6 @@ export class ObservabilityService {
     private readonly batteryRepo: Repository<BatteryMetric>,
     @InjectRepository(SensorMetric)
     private readonly sensorRepo: Repository<SensorMetric>,
-    @InjectRepository(DiskHealth)
-    private readonly diskRepo: Repository<DiskHealth>,
     @InjectRepository(GpuMetric)
     private readonly gpuRepo: Repository<GpuMetric>,
     @InjectRepository(SoftwareItem)
@@ -86,26 +82,6 @@ export class ObservabilityService {
     await this.sensorRepo.insert(rows);
   }
 
-  async ingestDiskHealth(agentId: string, msg: DiskHealthMsg): Promise<void> {
-    if (!msg.drives?.length) return;
-    const ts = new Date(msg.timestamp);
-    const rows = msg.drives.map((d) =>
-      this.diskRepo.create({
-        agentId,
-        timestamp: ts,
-        device: d.device,
-        model: d.model ?? null,
-        status: d.status,
-        predictedFailure: d.predictedFailure ?? false,
-        temperatureC: d.temperatureC ?? null,
-        powerOnHours: d.powerOnHours ?? null,
-        reallocatedSectors: d.reallocatedSectors ?? null,
-        wearLevelingPercent: d.wearLevelingPercent ?? null,
-      }),
-    );
-    await this.diskRepo.insert(rows);
-  }
-
   async ingestGpu(agentId: string, msg: GpuMsg): Promise<void> {
     if (!msg.gpus?.length) return;
     const ts = new Date(msg.timestamp);
@@ -115,6 +91,9 @@ export class ObservabilityService {
         timestamp: ts,
         gpuIndex: g.index,
         name: g.name,
+        vendor: g.vendor ?? null,
+        driverVersion: g.driverVersion ?? null,
+        slotType: g.slotType ?? null,
         utilizationPercent: g.utilizationPercent,
         memoryUsedBytes: g.memoryUsedBytes,
         memoryTotalBytes: g.memoryTotalBytes,
@@ -236,18 +215,6 @@ export class ObservabilityService {
       order: { timestamp: 'DESC' },
       take: limit,
     });
-  }
-
-  /** Latest reading per device — what the UI shows as a card. */
-  async latestDiskHealth(agentId: string): Promise<DiskHealth[]> {
-    const rows = await this.diskRepo
-      .createQueryBuilder('d')
-      .distinctOn(['d.device'])
-      .where('d.agentId = :agentId', { agentId })
-      .orderBy('d.device', 'ASC')
-      .addOrderBy('d.timestamp', 'DESC')
-      .getMany();
-    return rows;
   }
 
   async latestGpu(agentId: string): Promise<GpuMetric[]> {
