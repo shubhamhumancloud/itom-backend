@@ -51,6 +51,17 @@ func collectLinuxSoftware(ctx context.Context) ([]SoftwareItem, error) {
 }
 
 func runDpkgQuery(ctx context.Context) ([]SoftwareItem, error) {
+	// Prefer the set of packages the user explicitly installed (apt-mark
+	// showmanual). On a typical Ubuntu desktop this trims ~2,000 → ~150 by
+	// dropping all the auto-pulled libraries, -dev packages, and other
+	// transitive deps — which is what users actually mean by "installed
+	// software." dpkg-query still supplies version/maintainer/size; apt-mark
+	// just narrows the set.
+	//
+	// If apt-mark isn't available (older system, minimal container without
+	// apt) we fall back to the full dpkg list — historical behaviour.
+	manual := aptMarkShowManual(ctx)
+
 	cmd := exec.CommandContext(ctx, "dpkg-query", "-W",
 		"-f=${Package}\t${Version}\t${Maintainer}\t${Installed-Size}\n")
 	raw, err := cmd.Output()
@@ -62,6 +73,11 @@ func runDpkgQuery(ctx context.Context) ([]SoftwareItem, error) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 2 || fields[0] == "" {
 			continue
+		}
+		if manual != nil {
+			if _, ok := manual[fields[0]]; !ok {
+				continue
+			}
 		}
 		var sizeBytes uint64
 		if len(fields) >= 4 {
@@ -82,6 +98,28 @@ func runDpkgQuery(ctx context.Context) ([]SoftwareItem, error) {
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+// aptMarkShowManual returns the set of packages the user explicitly installed
+// (vs. auto-pulled as dependencies). Returns nil when apt-mark isn't present
+// or fails — caller treats that as "no filter, use the full dpkg list".
+func aptMarkShowManual(ctx context.Context) map[string]struct{} {
+	if _, err := exec.LookPath("apt-mark"); err != nil {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, "apt-mark", "showmanual").Output()
+	if err != nil {
+		return nil
+	}
+	names := strings.Fields(string(out))
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return set
 }
 
 func runRPMQuery(ctx context.Context) ([]SoftwareItem, error) {

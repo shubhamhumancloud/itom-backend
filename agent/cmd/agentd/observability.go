@@ -126,35 +126,41 @@ func startObservability(
 		return err
 	})
 
-	// Software inventory — once per 24 h, plus once on startup so the UI is
-	// populated immediately. Skip after one ErrUnsupportedOS (e.g. unknown
-	// Linux distro without dpkg/rpm).
+	// Software inventory — once per 24 h, plus once shortly after startup
+	// so the UI is populated immediately. If the WS isn't connected or the
+	// send fails transiently, retry every `softwareRetryDelay` until one
+	// emission succeeds, then drop back to the 24 h cadence. Without this,
+	// a WS reconnect race at the 30-second mark would leave the UI empty
+	// for a full day.
 	swUnavailable := false
+	const softwareRetryDelay = 30 * time.Second
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		// Fire once shortly after startup, then on the long interval.
-		startupDelay := 30 * time.Second
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(startupDelay):
-		}
-		emit := func() {
-			if swUnavailable || !wsc.IsConnected() {
-				return
+		// emit returns true when we're done for this cycle (success, OS
+		// unsupported, or genuinely-empty parser output). false means
+		// transient failure — caller should retry after softwareRetryDelay.
+		emit := func() bool {
+			if swUnavailable {
+				return true
+			}
+			if !wsc.IsConnected() {
+				return false
 			}
 			items, err := collector.CollectSoftware(ctx)
 			if errors.Is(err, collector.ErrUnsupportedOS) {
 				swUnavailable = true
 				log.Info("software inventory not supported on this OS; disabled")
-				return
+				return true
 			}
-			if err != nil || len(items) == 0 {
-				if err != nil {
-					log.Warn("software collect failed", "err", err)
-				}
-				return
+			if err != nil {
+				log.Warn("software collect failed", "err", err)
+				return false
+			}
+			if len(items) == 0 {
+				// Parser ran but returned nothing — don't hot-loop; wait for next tick.
+				log.Warn("software inventory empty; skipping send")
+				return true
 			}
 			reqID := uuid.NewString()
 			_, err = wsc.SendAcked(ctx, reqID, wsproto.SoftwareInventory{
@@ -165,11 +171,30 @@ func startObservability(
 			}, 60*time.Second)
 			if err != nil {
 				log.Warn("software send failed", "err", err)
-			} else {
-				log.Info("software inventory sent", "items", len(items))
+				return false
+			}
+			log.Info("software inventory sent", "items", len(items))
+			return true
+		}
+		emitUntilOK := func() {
+			for {
+				if emit() {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(softwareRetryDelay):
+				}
 			}
 		}
-		emit()
+		// Initial attempt shortly after startup.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(softwareRetryDelay):
+		}
+		emitUntilOK()
 		t := time.NewTicker(softwareInterval)
 		defer t.Stop()
 		for {
@@ -177,7 +202,7 @@ func startObservability(
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				emit()
+				emitUntilOK()
 			}
 		}
 	}()
