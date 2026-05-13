@@ -122,11 +122,55 @@ func collectMacSoftware(ctx context.Context) ([]SoftwareItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	// We deliberately don't pull in a full plist parser dependency — we
-	// extract the bare minimum fields with a lightweight scan over the JSON.
-	// system_profiler returns a stable shape:
-	//   { "SPApplicationsDataType": [ { "_name": "...", "version": "..." }, ... ] }
-	return parseMacAppJSON(raw), nil
+	items, paths := parseMacAppJSON(raw)
+	if sizes := macBundleSizes(ctx, paths); len(sizes) > 0 {
+		for i, p := range paths {
+			if sz, ok := sizes[p]; ok {
+				items[i].SizeBytes = sz
+			}
+		}
+	}
+	return items, nil
+}
+
+// macBundleSizes shells out to `du -sk` with every app bundle path in one
+// call. macOS `du -sk` prints "<KB>\t<path>" per line; we parse that into
+// path→bytes. We deliberately use one batched invocation rather than 300+
+// process spawns. Errors on individual paths (permissions, missing) are
+// silently skipped — the size column just shows "—" for those rows.
+func macBundleSizes(ctx context.Context, paths []string) map[string]uint64 {
+	valid := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		valid = append(valid, p)
+	}
+	if len(valid) == 0 {
+		return nil
+	}
+	args := append([]string{"-sk"}, valid...)
+	out, _ := exec.CommandContext(ctx, "du", args...).Output()
+
+	sizes := make(map[string]uint64, len(valid))
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// Format: "<kilobytes>\t<path>" (BSD du). Sometimes leading spaces.
+		tab := strings.IndexByte(line, '\t')
+		if tab <= 0 {
+			continue
+		}
+		kb := parseUint(line[:tab])
+		if kb == 0 {
+			continue
+		}
+		sizes[line[tab+1:]] = kb * 1024
+	}
+	return sizes
 }
 
 // ---------- Windows ----------

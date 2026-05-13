@@ -15,7 +15,7 @@ import (
 // capacities. Most users have one battery; the aggregation is a safe default.
 var ErrNoBattery = errors.New("no battery present")
 
-func CollectBattery(_ context.Context) (*BatteryReading, error) {
+func CollectBattery(ctx context.Context) (*BatteryReading, error) {
 	bats, err := battery.GetAll()
 	if err != nil || len(bats) == 0 {
 		// distatus returns ErrFatal/ErrPartial on partial reads; treat as no battery.
@@ -69,12 +69,16 @@ func CollectBattery(_ context.Context) (*BatteryReading, error) {
 		}
 	}
 
-	return &BatteryReading{
+	reading := &BatteryReading{
 		Percent:           roundTo(percent, 2),
 		Charging:          charging,
 		OnAC:              ac,
 		DesignCapacityMwh: int(designSum),
 		FullCapacityMwh:   int(fullSum),
 		HealthPercent:     roundTo(healthPct, 2),
-	}, nil
+	}
+	// macOS: overlay percent + charging state from pmset so it matches the
+	// menu bar. No-op on Linux/Windows.
+	adjustBatteryForOS(ctx, reading)
+	return reading, nil
 }
