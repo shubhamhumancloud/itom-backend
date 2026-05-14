@@ -19,6 +19,14 @@ export class DashboardController {
     return this.dashboard.activityTrend(parseInt(days, 10) || 30, tenantId);
   }
 
+  @Get('status-timeline')
+  statusTimeline(
+    @TenantId() tenantId: string | null,
+    @Query('hours') hours = '24',
+  ) {
+    return this.dashboard.statusTimeline(parseInt(hours, 10) || 24, tenantId);
+  }
+
   @Get('os-distribution')
   osDistribution(@TenantId() tenantId: string | null) {
     return this.dashboard.osDistribution(tenantId);
