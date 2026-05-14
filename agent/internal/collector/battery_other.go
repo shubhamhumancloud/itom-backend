@@ -1,11 +1,10 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package collector
 
 import "context"
 
-// adjustBatteryForOS is a no-op on Windows (and any other build target). The
-// distatus library's readings already match what Windows shows in its native
-// battery indicator, and cycle count via WMI's Win32_Battery is unreliable —
-// most laptop firmware leaves the property unpopulated.
+// adjustBatteryForOS is a no-op for build targets we don't actively support
+// (everything outside darwin/linux/windows). Each supported OS has its own
+// battery_<os>.go file that overlays platform-specific fields.
 func adjustBatteryForOS(_ context.Context, _ *BatteryReading) {}

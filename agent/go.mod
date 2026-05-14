@@ -9,6 +9,7 @@ require (
 	github.com/kardianos/service v1.2.4
 	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/yusufpapurcu/wmi v1.2.4
+	golang.org/x/sys v0.41.0
 	modernc.org/sqlite v1.34.4
 )
 
@@ -24,7 +25,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 	howett.net/plist v1.0.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
