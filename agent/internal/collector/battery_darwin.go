@@ -12,22 +12,56 @@ import (
 )
 
 // adjustBatteryForOS overlays the percent + charging state from `pmset -g batt`
-// so the reading matches what the macOS menu bar shows. Apple's IOKit raw
-// percentage (used by distatus) is uncalibrated and runs 2–4% lower than the
-// calibrated value the menu bar / Activity Monitor display.
+// so the reading matches what the macOS menu bar shows (Apple's IOKit raw
+// percentage that distatus reads is uncalibrated and runs 2–4% lower) and
+// fills in the lifetime cycle count via ioreg (distatus does not expose it).
 //
-// If pmset parsing fails for any reason we leave the distatus values in place.
+// Each enrichment is independent — pmset failure does not block cycle count
+// and vice versa. Distatus values are left in place on per-field failure.
 func adjustBatteryForOS(ctx context.Context, r *BatteryReading) {
 	if r == nil {
 		return
 	}
-	pct, charging, onAC, ok := parsePmsetBatt(ctx)
-	if !ok {
-		return
+	if pct, charging, onAC, ok := parsePmsetBatt(ctx); ok {
+		r.Percent = roundTo(pct, 2)
+		r.Charging = charging
+		r.OnAC = onAC
 	}
-	r.Percent = roundTo(pct, 2)
-	r.Charging = charging
-	r.OnAC = onAC
+	if cycles := readAppleSmartBatteryCycleCount(ctx); cycles > 0 {
+		r.CycleCount = cycles
+	}
+}
+
+// readAppleSmartBatteryCycleCount returns the lifetime CycleCount property
+// from IOKit's AppleSmartBattery service (via ioreg, which doesn't need root).
+// Returns 0 on any failure — caller leaves the field omitted.
+//
+// ioreg line of interest looks like:
+//
+//	"CycleCount" = 245
+func readAppleSmartBatteryCycleCount(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "/usr/sbin/ioreg", "-rn", "AppleSmartBattery").Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "\"CycleCount\"") {
+			continue
+		}
+		eq := strings.LastIndex(t, "=")
+		if eq < 0 {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(t[eq+1:]))
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	return 0
 }
 
 // pmset output line we care about looks like:
