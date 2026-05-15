@@ -39,6 +39,18 @@ export interface CpuByAgentEntry {
   timestamp: string | null;
 }
 
+export interface StatusTimelinePoint {
+  /** Top-of-hour timestamp (UTC ISO). */
+  hour: string;
+  /** Agents with at least one metric sample in this hour. */
+  online: number;
+  /** Registered agents that did NOT report any metric in this hour. */
+  offline: number;
+  /** Agents registered after this hour ended — kept as a separate
+   *  bucket so the stacked totals don't lie about fleet size at time T. */
+  unknown: number;
+}
+
 @Injectable()
 export class DashboardService {
   constructor(
@@ -137,6 +149,80 @@ export class DashboardService {
         heartbeats: v?.heartbeats ?? 0,
         agents: v?.agents ?? 0,
       });
+    }
+    return out;
+  }
+
+  async statusTimeline(
+    hours: number,
+    tenantId?: string | null,
+  ): Promise<StatusTimelinePoint[]> {
+    // Window in [1, 168] hours (max 7 days). Caps stop a runaway query.
+    const safeHours = Math.max(1, Math.min(hours, 168));
+    const now = new Date();
+    // Top-of-hour anchor so each bucket lines up cleanly.
+    const endHour = new Date(now);
+    endHour.setUTCMinutes(0, 0, 0);
+    endHour.setUTCHours(endHour.getUTCHours() + 1);
+    const since = new Date(endHour);
+    since.setUTCHours(since.getUTCHours() - safeHours);
+
+    // For each hour, count distinct agents that emitted a metric sample —
+    // a metric arriving is unambiguous proof the agent was online at that
+    // moment. Cheap to compute because of the (timestamp, agentId) index.
+    const qb = this.metricsRepo
+      .createQueryBuilder('m')
+      .select(`date_trunc('hour', m.timestamp)`, 'hour')
+      .addSelect('COUNT(DISTINCT m."agentId")', 'online')
+      .where('m.timestamp >= :since', { since })
+      .andWhere('m.timestamp < :end', { end: endHour })
+      .groupBy('hour')
+      .orderBy('hour', 'ASC');
+
+    if (tenantId) {
+      qb.andWhere(
+        'm."agentId" IN (SELECT a."agentId" FROM agents a WHERE a."tenantId" = :tenantId)',
+        { tenantId },
+      );
+    }
+
+    const rows: Array<{ hour: string; online: string }> = await qb.getRawMany();
+    const onlineByHour = new Map<string, number>();
+    for (const r of rows) {
+      const key = new Date(r.hour).toISOString();
+      onlineByHour.set(key, parseInt(r.online, 10) || 0);
+    }
+
+    // Fleet size known at hour T = agents registered before T. We pull
+    // registration times once and bucket-sort instead of N round-trips.
+    const agentsQb = this.agentsRepo
+      .createQueryBuilder('a')
+      .select(['a."registeredAt" AS "registeredAt"']);
+    if (tenantId) agentsQb.where('a."tenantId" = :tenantId', { tenantId });
+    const agentRows: Array<{ registeredAt: Date }> = await agentsQb.getRawMany();
+    const registeredAtAsc = agentRows
+      .map((r) => new Date(r.registeredAt).getTime())
+      .sort((a, b) => a - b);
+
+    const out: StatusTimelinePoint[] = [];
+    for (let i = 0; i < safeHours; i++) {
+      const bucketStart = new Date(since);
+      bucketStart.setUTCHours(bucketStart.getUTCHours() + i);
+      const key = bucketStart.toISOString();
+      const online = onlineByHour.get(key) ?? 0;
+      const bucketEndMs = bucketStart.getTime() + 60 * 60 * 1000;
+      // Binary search would be tighter, but a fleet rarely has so many
+      // agents that O(N) per bucket matters at this aggregation level.
+      const registeredByThen = registeredAtAsc.filter(
+        (t) => t < bucketEndMs,
+      ).length;
+      const offline = Math.max(0, registeredByThen - online);
+      // "Unknown" exists for symmetry with the rest of the dashboard —
+      // it's reserved for agents we have no observation about in this
+      // hour yet. With the current metrics-as-proof model that always
+      // collapses into `offline`, so we expose it for future use.
+      const unknown = 0;
+      out.push({ hour: key, online, offline, unknown });
     }
     return out;
   }
