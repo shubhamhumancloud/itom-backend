@@ -24,6 +24,11 @@ import { SensorMetric } from './observability/entities/sensor-metric.entity';
 import { GpuMetric } from './observability/entities/gpu-metric.entity';
 import { SoftwareItem } from './observability/entities/software-item.entity';
 import { DiscoveryModule } from './discovery/discovery.module';
+import { AlertsModule } from './alerts/alerts.module';
+import { AlertRule } from './alerts/entities/alert-rule.entity';
+import { Alert } from './alerts/entities/alert.entity';
+import { Incident } from './alerts/entities/incident.entity';
+import { IncidentEvent } from './alerts/entities/incident-event.entity';
 import { ScanJob } from './discovery/entities/scan-job.entity';
 import { DiscoverySession } from './discovery/entities/discovery-session.entity';
 import { Observation } from './discovery/entities/observation.entity';
@@ -75,6 +80,10 @@ import { DiscoveryEvent } from './discovery/entities/discovery-event.entity';
         NeighborEdge,
         OpenPort,
         DiscoveryEvent,
+        AlertRule,
+        Alert,
+        Incident,
+        IncidentEvent,
       ],
       synchronize: true,
       logging: process.env.DB_LOGGING === 'true',
@@ -86,6 +95,7 @@ import { DiscoveryEvent } from './discovery/entities/discovery-event.entity';
     DashboardModule,
     ObservabilityModule,
     DiscoveryModule,
+    AlertsModule,
   ],
   controllers: [HealthController],
 })
