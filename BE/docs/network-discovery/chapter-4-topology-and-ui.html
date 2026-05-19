@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 4 — Topology Engine + UI</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 4</div>
+<h1>The Topology Engine + UI</h1>
+<p class="subtitle">Drawing the map, hanging it on the wall</p>
+
+<h2>What this chapter is about</h2>
+<p>By now we have three different "witnesses" who saw the network: the firewall ingestor, the SNMP crawler, and the active scanner. Each has put their notes into the database as <code>observation</code> rows. Some of these notes overlap ("I saw 10.0.5.42 too"). Some conflict ("I think it runs Linux"; "I think it runs Windows"). Some are stale ("I haven't seen 10.0.5.42 in 8 hours").</p>
+
+<p>This chapter is about turning that pile of observations into <b>one coherent picture</b>: a graph of devices and links the customer can <em>look at</em> on a screen, click around, search, and see "what changed since last week."</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> Three different surveyors walked through your factory and brought back rough notebooks. Surveyor A counted machines, Surveyor B traced the cabling, Surveyor C noted serial numbers off a sticker. Some pages agree, some don't, some are weeks old. The cartographer's job — that's us in this chapter — is to lay all three notebooks side by side, decide whose word to trust on what, draw a single clean map, mark which machines are currently humming and which are silent, and pin the map on the wall in the supervisor's office. When a surveyor brings a new notebook tomorrow, we don't throw the old map away — we save it as "yesterday's snapshot" and overlay the diff in red.
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>Observation.</b> A single fact tied to "when I saw it" and "who saw it." Built in Chapter 0. Examples: "MAC aa:bb:.. observed on port Gi1/0/14 of switch-A at 14:03 by collector-7," "IP 10.0.5.42 answered TCP/22 with banner SSH-2.0-OpenSSH_8.4 at 14:22 by collector-9."</div>
+
+<div class="term"><b>Provenance.</b> "Where did this fact come from?" Every entity in our database can answer it. If two sources disagree, provenance lets us pick the more trustworthy one and explain the choice.</div>
+
+<div class="term"><b>Fact fusion.</b> The process of taking many observations of the same logical thing (a device, an IP binding, an open port) and producing one current "best" answer.</div>
+
+<div class="term"><b>Topology graph.</b> A graph data structure where <b>nodes</b> are devices (and optionally subnets, sites) and <b>edges</b> are connections between them — LLDP/CDP cables, IPSec tunnels, L3 adjacencies, host-to-port placements.</div>
+
+<div class="term"><b>Snapshot.</b> A point-in-time copy of the topology graph. We keep these so the customer can ask "what did our network look like last Tuesday?" or "what changed in the last hour?".</div>
+
+<div class="term"><b>Diff.</b> The change between two snapshots. "These three devices are new, this device disappeared, this neighbour edge moved from port 14 to port 22."</div>
+
+<div class="term"><b>Lifecycle state.</b> Independent of "is it on right now?" — this answers "does this device still exist?". Three values: <code>active</code> (we believe it's part of the network), <code>decommissioned</code> (we haven't seen it in a while; flagged for review), <code>archived</code> (long absent; not shown on map by default but kept for history).</div>
+
+<div class="term"><b>Availability state.</b> The "is it on right now?" axis. Four values: <code>up</code>, <code>down</code>, <code>unknown</code>, <code>maintenance</code>. Independent from lifecycle — a decommissioned device can briefly appear "up" if someone plugs it in by mistake.</div>
+
+<div class="term"><b>Hysteresis.</b> The "wait before flapping" rule. We don't mark a device <code>down</code> after one missed ping; we wait for 3 consecutive failures. Same in reverse: 2 consecutive successes before we trust <code>up</code>. Prevents alert spam from one packet loss.</div>
+
+<div class="term"><b>Cytoscape.js.</b> A widely used JavaScript library for rendering interactive network graphs in the browser. Hands-down the standard choice for enterprise topology visualisation. Apache 2.0 licence.</div>
+
+<div class="term"><b>Force-directed layout.</b> A graph-drawing algorithm that pretends the edges are springs and the nodes repel each other; it lets the graph settle into a readable shape automatically. Default rendering style for topology maps.</div>
+
+<div class="term"><b>NDJSON (Newline-Delimited JSON).</b> One JSON object per line, no top-level array. Streamable. We use it on the WebSocket from collector to server so we can flush observations as we discover them.</div>
+
+<h2>What we're building (the picture)</h2>
+
+<pre>
+   ┌──────────────────────────────────────────────────────────┐
+   │                  POSTGRES                                │
+   │   ┌──────────────────────────────────┐                   │
+   │   │  observation table               │  (raw witness    │
+   │   │  - tenant_id, source_collector,  │   accounts from  │
+   │   │  - session_id, seen_at, kind,    │   3 pillars)     │
+   │   │  - subject_id, attribute, value  │                  │
+   │   └──────────────────────────────────┘                  │
+   │                ▼  Fact-Fusion service                    │
+   │   ┌──────────────────────────────────┐                   │
+   │   │  current-state tables            │                   │
+   │   │  device, interface, edge, ...    │                   │
+   │   └──────────────────────────────────┘                  │
+   │                ▼  Snapshot job (hourly)                  │
+   │   ┌──────────────────────────────────┐                   │
+   │   │  topology_snapshot               │                   │
+   │   │  topology_snapshot_node/edge     │                   │
+   │   └──────────────────────────────────┘                  │
+   └──────────────────────────────────────────────────────────┘
+                          │ HTTPS / JSON
+                          ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │   NestJS API   /v1/discovery/topology                    │
+   │                /v1/discovery/devices                     │
+   │                /v1/discovery/devices/:id                 │
+   │                /v1/discovery/diff?from=...&amp;to=...        │
+   └──────────────────────────────────────────────────────────┘
+                          │ JSON graph
+                          ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │   Next.js frontend                                       │
+   │   ┌──────────────────────────────────┐                   │
+   │   │  Cytoscape.js renderer           │                   │
+   │   │  - Site picker (Mumbai-HQ ...)   │                   │
+   │   │  - Search box                    │                   │
+   │   │  - Click device → side panel     │                   │
+   │   │  - Time slider for snapshots     │                   │
+   │   └──────────────────────────────────┘                  │
+   └──────────────────────────────────────────────────────────┘
+</pre>
+
+<h2>The fact-fusion problem (and how we solve it)</h2>
+
+<p>Suppose we have three observations of the same logical device:</p>
+<table>
+<tr><th>Witness</th><th>Says</th><th>Time</th></tr>
+<tr><td>SNMP crawler</td><td>"chassis serial = FDO2412Z0AB, hostname = swA, vendor = Cisco"</td><td>14:00</td></tr>
+<tr><td>Active scanner</td><td>"10.0.0.5 answered SNMP, sysObjectID points to Cisco IOS-XE, banner from SSH says swA"</td><td>14:22</td></tr>
+<tr><td>Firewall ARP</td><td>"10.0.0.5 has MAC aa:bb:cc:dd:ee:01"</td><td>13:58</td></tr>
+</table>
+
+<p>These are three accounts of one device. Fusion rules:</p>
+<ol>
+<li><b>Identity merge.</b> Match by chassis serial first; then by MAC; then by IP. The result is one logical <code>device</code> row with multiple aliases.</li>
+<li><b>Attribute precedence.</b> When two witnesses disagree on an attribute, prefer the one with stronger source. Ranking: SNMP (most authoritative) &gt; firewall ingest &gt; banner grab &gt; ICMP-only. Per-attribute rules — vendor from SNMP wins, hostname from TLS-cert SAN can override DNS PTR, etc.</li>
+<li><b>Recency window.</b> Within the same source rank, latest <code>seen_at</code> wins.</li>
+<li><b>Conflict log.</b> When fusion changes its mind, write a row to <code>fusion_conflict</code> with both candidate values and the rule that resolved it. Audit & debug both depend on this.</li>
+</ol>
+
+<h2>Two-axis device state (the trick most homegrown systems get wrong)</h2>
+
+<p>The single biggest mistake when building one of these: conflating "is it powered on" with "does it still exist". They're independent.</p>
+
+<table>
+<tr><th></th><th>up</th><th>down</th><th>unknown</th><th>maintenance</th></tr>
+<tr><td><b>active</b></td><td>Normal device, currently reachable</td><td>Active device, currently unreachable — alert</td><td>Just discovered or just lost contact</td><td>Operator marked it under planned work</td></tr>
+<tr><td><b>decommissioned</b></td><td>Reappeared after long absence — investigate</td><td>Long absent; expected</td><td>Long absent; expected</td><td>n/a</td></tr>
+<tr><td><b>archived</b></td><td>Hidden from default view but retained for history</td><td>Hidden from default view but retained for history</td><td>—</td><td>n/a</td></tr>
+</table>
+
+<p>Rules of thumb:</p>
+<ul>
+<li><code>active → decommissioned</code> automatic after configurable absence (default 7 days).</li>
+<li><code>decommissioned → archived</code> automatic after a longer period (default 90 days).</li>
+<li>Either can be set manually by an operator at any time.</li>
+<li>Availability has hysteresis — 3 consecutive misses to flip <code>up→down</code>; 2 consecutive hits to flip <code>down→up</code>.</li>
+</ul>
+
+<h2>Step-by-step plan</h2>
+
+<h3>Step 1 — Build the fusion service</h3>
+<p>Create <code>backend/BE/src/discovery/fusion/fusion.service.ts</code>. Public API:</p>
+<pre>
+fuseSession(sessionId): Promise&lt;FusionSummary&gt;;
+fuseTenant(tenantId, since: Date): Promise&lt;FusionSummary&gt;;
+</pre>
+<p>Triggers:</p>
+<ol>
+<li>After every <code>ScanJobDone</code> from a collector → call <code>fuseSession</code>.</li>
+<li>Hourly cron → call <code>fuseTenant</code> with the last hour, to clean up cross-session merges.</li>
+</ol>
+<p>Internally: read observations newer than the last fuse-pointer, group by candidate identity (chassis ID → MAC → IP), upsert into current-state tables.</p>
+
+<h3>Step 2 — Build the snapshot service</h3>
+<p>Create <code>backend/BE/src/discovery/snapshot/snapshot.service.ts</code>. Hourly cron per tenant:</p>
+<pre>
+tx.begin();
+INSERT INTO topology_snapshot (tenant_id, built_at, …) RETURNING id AS sid;
+INSERT INTO topology_snapshot_node SELECT sid, ... FROM device WHERE tenant_id=...;
+INSERT INTO topology_snapshot_edge SELECT sid, ... FROM neighbor_edge WHERE ...;
+tx.commit();
+</pre>
+<p>Retention: keep one snapshot per hour for 7 days; one per day for 90 days; one per month forever (rolling-window archival).</p>
+
+<h3>Step 3 — Build the diff endpoint</h3>
+<p><code>GET /v1/discovery/diff?from={snapshotId}&amp;to={snapshotId}</code> → <code>{nodesAdded, nodesRemoved, nodesChanged, edgesAdded, edgesRemoved, edgesChanged}</code>.</p>
+<p>Implementation is pure SQL — set differences on the snapshot tables. No graph-library needed.</p>
+
+<h3>Step 4 — Build the topology read API</h3>
+
+<table>
+<tr><th>Endpoint</th><th>Returns</th></tr>
+<tr><td><code>GET /v1/discovery/sites</code></td><td>List of sites for the current tenant.</td></tr>
+<tr><td><code>GET /v1/discovery/topology?siteId={id}&amp;at={ts}</code></td><td>Cytoscape-formatted JSON: <code>{nodes:[...], edges:[...]}</code>. <code>at</code> defaults to "now"; if specified, returns the snapshot closest to that time.</td></tr>
+<tr><td><code>GET /v1/discovery/devices?siteId={id}&amp;q={search}</code></td><td>Searchable list, paged.</td></tr>
+<tr><td><code>GET /v1/discovery/devices/:id</code></td><td>Full detail: interfaces, IPs, MACs, open ports, recent observations, lifecycle &amp; availability history.</td></tr>
+<tr><td><code>GET /v1/discovery/diff?from={sid}&amp;to={sid}</code></td><td>Snapshot diff.</td></tr>
+</table>
+
+<h3>Step 5 — Build the frontend page</h3>
+<ol>
+<li>Add <code>frontend/src/app/discovery/topology/page.tsx</code> in the existing Next.js app.</li>
+<li>Install <code>cytoscape</code> and <code>cytoscape-fcose</code> (better force-directed layout).</li>
+<li>Layout: left sidebar = site picker + search, centre = the graph, right sidebar = selected-device detail panel, top bar = time slider for snapshots.</li>
+<li>Node styling by device kind: router, switch, firewall, server, printer, IoT, unknown — distinct icons. Availability shown as a coloured dot (green/red/grey/blue).</li>
+<li>Edge styling: solid for L2 LLDP/CDP, dashed for L3 routing adjacency, double-dashed for IPSec tunnels.</li>
+</ol>
+
+<h3>Step 6 — Add change-event surfacing</h3>
+<p>When the snapshot diff produces an interesting change, write a <code>discovery_event</code> row:</p>
+<ul>
+<li><code>device_added</code></li>
+<li><code>device_disappeared</code></li>
+<li><code>device_moved_port</code> (same MAC, different switch port)</li>
+<li><code>new_open_port</code></li>
+<li><code>new_neighbor_edge</code></li>
+</ul>
+<p>Surface these on the dashboard as a feed. Chapter 5 turns them into alerts.</p>
+
+<h3>Step 7 — Time-slider snapshots</h3>
+<p>The frontend's time slider lets the user drag back through hourly snapshots. Loads via <code>?at=</code> on the topology endpoint. The graph re-renders, and changed entities animate (added = fade-in green, removed = fade-out red, moved = animated edge swap).</p>
+
+<h2>How we test Chapter 4</h2>
+
+<div class="box">
+<b>Test 1 — Identity merge.</b>
+<ol>
+<li>Inject observations from all 3 pillars for the same device (firewall ARP + SNMP system + active SSH banner).</li>
+<li>Confirm exactly ONE row in <code>device</code>, with all three IPs/MACs aliased to it.</li>
+<li>Confirm a <code>fusion_conflict</code> row if vendor names disagreed, resolved per precedence.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — Snapshot &amp; diff.</b>
+<ol>
+<li>Trigger snapshot at T0.</li>
+<li>Add a new device, change a banner, remove an old device.</li>
+<li>Trigger snapshot at T1.</li>
+<li>Diff endpoint returns exactly: 1 added, 1 removed, 1 changed.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — Lifecycle automation.</b>
+<ol>
+<li>Mark a device's <code>last_seen_at</code> as 8 days ago.</li>
+<li>Run lifecycle cron.</li>
+<li>Device flips to <code>decommissioned</code>; an event row is written.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — Availability hysteresis.</b>
+<ol>
+<li>Simulate one missed ping → device stays <code>up</code>.</li>
+<li>Three in a row → device flips to <code>down</code>.</li>
+<li>Two successful pings → device flips back to <code>up</code>.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 5 — Frontend rendering.</b>
+<ol>
+<li>Build a 50-device synthetic graph.</li>
+<li>Page loads in &lt; 2 s; graph stabilises in &lt; 3 s.</li>
+<li>Click on a device → side panel shows interfaces, IPs, MACs, recent observations.</li>
+<li>Search "swA" → graph centres on that device.</li>
+<li>Time slider 1 h back → graph re-renders to that snapshot.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 6 — Cross-tenant isolation in API.</b>
+<ol>
+<li>Auth as tenant Acme.</li>
+<li>Hit <code>GET /v1/discovery/devices/:id</code> with an ID that belongs to Globex.</li>
+<li>Expect HTTP 404, not 403, not 200, never the actual record. (RLS from Chapter 0 should make this trivial.)</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>Identity merge collisions.</b> Two physically different devices share the same MAC because some network card driver reuses a default. Always use chassis serial as primary key when available; only fall back to MAC when serial is absent. Log when MAC was used as the merge key.</div>
+
+<div class="pitfall"><b>Stale current-state.</b> If the fusion service crashes mid-run, current-state can become inconsistent. Make fusion idempotent and re-runnable for a session ID. Always wrap the upsert in a transaction.</div>
+
+<div class="pitfall"><b>Snapshot bloat.</b> Storing every-hour snapshots forever explodes the table. Implement the rolling-window retention (1h × 7d, 1d × 90d, 1m × forever) from day one — it's much harder to add later.</div>
+
+<div class="pitfall"><b>Cytoscape rendering 5,000 nodes.</b> Above ~1,500 nodes, Cytoscape's default force-directed layout becomes sluggish. Switch to <code>fcose</code> or <code>cose-bilkent</code>; group "host clouds" behind a switch into a single collapsed node that expands on click.</div>
+
+<div class="pitfall"><b>Time-slider race conditions.</b> User drags slider quickly; we fire 30 requests; they arrive out of order. Always track the last requested timestamp and discard responses that aren't for the latest.</div>
+
+<div class="pitfall"><b>Conflicting observations creating flapping rows.</b> Two collectors running at once can both update the same device with slightly different attributes. Use Postgres advisory locks keyed by <code>device_id</code> during fusion to serialise updates.</div>
+
+<div class="pitfall"><b>Lifecycle automation deleting real data.</b> Never automatically delete; only mark <code>archived</code>. Deletion is operator-initiated and must require confirmation.</div>
+
+<div class="pitfall"><b>Showing wrong snapshot in the UI.</b> If the API returns "snapshot closest to <code>at</code>", be explicit about whether that's before or after; show the actual built_at timestamp prominently in the UI so the user knows what they're looking at.</div>
+
+<h2>Exit checklist (you can move to Chapter 5 only when ALL are true)</h2>
+<ul>
+<li>☐ Fact-fusion produces one device row when fed three witnesses for the same logical device.</li>
+<li>☐ Snapshot+diff endpoints work and return correct add/remove/change counts on a known scenario.</li>
+<li>☐ Lifecycle (active/decommissioned/archived) and availability (up/down/unknown/maintenance) are independent and tested.</li>
+<li>☐ Hysteresis verified: 1 miss does not flip state, 3 misses does.</li>
+<li>☐ Frontend renders a 1,500-node tenant graph in &lt; 5 s after layout.</li>
+<li>☐ Search, click-to-detail, and time-slider all work.</li>
+<li>☐ Cross-tenant API access is impossible (returns 404 on out-of-tenant IDs).</li>
+<li>☐ At least 5 distinct event types (device added/disappeared/moved/new-port/new-edge) are recorded by the diff service.</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 4 in 5 sentences</h3>
+<ol>
+<li>The three pillars dump observations into one table; fact-fusion turns them into one current-state row per logical device, with provenance and conflict logs.</li>
+<li>Hourly snapshots of the topology graph are stored on a rolling-window retention so the customer can travel back in time and diff.</li>
+<li>Every device has two independent state axes — lifecycle (active/decommissioned/archived) and availability (up/down/unknown/maintenance) — and conflating them is the most common bug to avoid.</li>
+<li>The frontend renders the graph with Cytoscape.js (force-directed layout), with site picker, search, click-to-detail, and a time slider.</li>
+<li>Diff between snapshots produces actionable events (device added, disappeared, moved port, new open port) — these become alerts in Chapter 5.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 4 of 6 — Topology Engine + UI</div>
+
+</body>
+</html>

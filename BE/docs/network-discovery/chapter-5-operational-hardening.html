@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 5 — Operational Hardening</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 5</div>
+<h1>Operational Hardening</h1>
+<p class="subtitle">From "works on stage" to "runs every night, unattended"</p>
+
+<h2>What this chapter is about</h2>
+<p>So far we've built a discovery pipeline that <em>works</em> — once. Operational hardening is the difference between "the demo went great" and "it has been running for a customer for 11 months and never woken anyone up at 2am." This chapter is about scheduled re-discovery, alerting on changes, observability of our own pipeline, polite retries, and graceful failure. Less glamorous than the previous chapters, but where most home-grown systems quietly die.</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> Building the map (Chapters 1–4) is like designing and constructing a brand-new shopping mall. Operational hardening is the night shift — the watchman who walks the corridors every two hours, the cleaners, the alarm system, the CCTV, the maintenance log, the duty manager who gets called only when something is genuinely on fire (not every time a stray cat triggers a sensor). Without the night shift, the mall opens once and slowly falls apart.
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>Cadence.</b> How often a recurring task runs. Different pillars have different natural cadences — pinging a switch every minute is fine; doing a full subnet port-scan every minute is reckless.</div>
+
+<div class="term"><b>Cron / cron job.</b> A scheduled task that runs on a fixed timing pattern. The classic Linux cron syntax is <code>* * * * *</code> (minute hour day month weekday). We use the Go library <code>github.com/robfig/cron/v3</code> in the backend and (separately) <code>@nestjs/schedule</code> in NestJS.</div>
+
+<div class="term"><b>Backoff.</b> When a target fails, don't retry immediately — wait, then retry, then wait longer, etc. <em>Exponential</em> backoff: 5s, 10s, 20s, 40s … capped at some maximum. <em>Jitter</em>: add random ±25% so a hundred retries don't all fire at the exact same second. We use <code>github.com/cenkalti/backoff/v4</code>.</div>
+
+<div class="term"><b>Worker pool.</b> A fixed-size set of goroutines that pick jobs off a queue. Stops you from accidentally spawning 50,000 goroutines and crashing your collector. We use <code>github.com/panjf2000/ants/v2</code>.</div>
+
+<div class="term"><b>Hysteresis.</b> "Be slow to change my mind." We don't flip a device <code>up→down</code> on one missed ping; we wait for 3 in a row. Prevents flapping when a single packet is lost.</div>
+
+<div class="term"><b>Flapping.</b> A device or link rapidly oscillating between <code>up</code> and <code>down</code>. Almost always a symptom of either a real flaky cable or insufficient hysteresis.</div>
+
+<div class="term"><b>Prometheus.</b> An open-source metrics-collection system. We expose internal counters like <code>scan_jobs_completed_total</code> on a <code>/metrics</code> endpoint; a Prometheus server scrapes them every 15 s, and we visualise them in Grafana.</div>
+
+<div class="term"><b>SLO (Service Level Objective).</b> A target like "99% of crawl jobs complete in &lt; 30 minutes" or "no scan job is queued longer than 1 hour." Lets the team see when the system is silently degrading.</div>
+
+<div class="term"><b>Structured logging.</b> Logs as JSON objects (level, time, msg, fields), not free-form strings. Lets a log aggregator filter by, e.g., <code>tenant_id=acme</code> instantly. We use <code>go.uber.org/zap</code>.</div>
+
+<div class="term"><b>Webhook.</b> An HTTP callback. Instead of "we tell the customer", we "POST a JSON payload to a URL the customer gave us when something happens." Standard pattern for alert delivery.</div>
+
+<div class="term"><b>Drift.</b> A configuration change you didn't make. Topology drift = "yesterday switch-A had 22 hosts; today it has 24 — was that you?" These are exactly the changes that need surfacing.</div>
+
+<h2>What we're building (the picture)</h2>
+
+<pre>
+        ┌─────────────────────── Server side cron ──────────────────────────┐
+        │                                                                    │
+        │  every 5 min ──► enqueue ICMP liveness sweep per site             │
+        │  every 1 hr  ──► enqueue SNMP inventory walk per device            │
+        │  every 24 hr ──► enqueue full active scan per tenant CIDR          │
+        │  every 6 hr  ──► enqueue firewall config ingest                    │
+        │  every 1 hr  ──► enqueue topology snapshot                         │
+        │  every 15 min──► sweep stale-job timeouts                          │
+        │  every 1 day ──► lifecycle sweep (active→decom; decom→archive)    │
+        │                                                                    │
+        └────────────┬───────────────────────────────────────────────────────┘
+                     │
+                     ▼ jobs flow through the same dispatcher built in Ch 0
+        ┌────────────────────────┐         ┌────────────────────────┐
+        │  Collectors            │ ──────► │  Observations          │
+        │  with worker pool,     │         │                        │
+        │  backoff, jitter       │         │  Fact fusion           │
+        └────────────────────────┘         │  Snapshot              │
+                                           │  Diff                  │
+                                           └──────┬─────────────────┘
+                                                  │
+                                                  ▼
+        ┌────────────────────────┐
+        │  Alert engine          │
+        │  - rules               │
+        │  - hysteresis          │
+        │  - rate limit          │
+        │  - webhook delivery    │
+        └────────────────────────┘
+                  │
+                  ▼
+        Customer's Slack / email / PagerDuty / Teams
+</pre>
+
+<h2>The cadence table (memorise this)</h2>
+
+<table>
+<tr><th>Job</th><th>Default cadence</th><th>Why</th></tr>
+<tr><td>Liveness sweep (ICMP+TCP-ping)</td><td>Every 5 minutes</td><td>How fast we want to detect "device down."</td></tr>
+<tr><td>SNMP interface counters poll</td><td>Every 5 minutes</td><td>For interface up/down state and bandwidth (future use).</td></tr>
+<tr><td>SNMP inventory walk (LLDP, ARP, MAC, routes)</td><td>Hourly</td><td>Topology rarely changes faster than that.</td></tr>
+<tr><td>Active port scan (full)</td><td>Daily, off-hours</td><td>Noisy; respect IDS and customer's working hours.</td></tr>
+<tr><td>Firewall config ingest</td><td>On-change webhook + 6-hour fallback poll</td><td>Configs change rarely but importantly.</td></tr>
+<tr><td>Topology snapshot</td><td>Hourly</td><td>Lines up with the inventory cadence.</td></tr>
+<tr><td>Stale-job sweeper</td><td>Every 15 minutes</td><td>Mark jobs <code>timeout</code> if collector dropped mid-run.</td></tr>
+<tr><td>Lifecycle sweep</td><td>Daily</td><td>Quiet, low-priority bookkeeping.</td></tr>
+<tr><td>Snapshot retention (rolling-window prune)</td><td>Daily</td><td>Stops the snapshot tables from growing forever.</td></tr>
+<tr><td>Audit-log archival</td><td>Weekly</td><td>Move rows older than 30 days to cold storage; keep the index.</td></tr>
+</table>
+
+<p>All cadences must be per-tenant overridable — a customer with 200 sites needs longer cycles than one with 5.</p>
+
+<h2>The availability state machine (in detail)</h2>
+
+<pre>
+                    ┌──────────────┐
+                    │   unknown    │  ◄── new device or just lost contact
+                    └──────┬───────┘
+                          / \
+                     ▲   /   \   ▲
+              2 OKs /     \    \ 3 fails
+                   /       \    \
+            ┌─────────┐  ┌──────────┐
+            │   up    │  │   down   │
+            └────┬────┘  └─────┬────┘
+                 │             │
+                 │  3 fails    │ 2 OKs
+                 ▼             ▼
+            ┌──────────┐  ┌────────┐
+            │   down   │  │   up   │
+            └──────────┘  └────────┘
+
+   maintenance ── any state can be manually overridden
+                  by an operator; auto-transitions paused
+</pre>
+
+<p>Implementation pseudocode:</p>
+<pre>
+on each liveness probe result for device D:
+  if probe success:
+    consecutive_failures = 0
+    consecutive_successes++
+    if state == down and consecutive_successes &gt;= 2:
+      state = up; emit "device_recovered" event; clear active alert
+  else:
+    consecutive_successes = 0
+    consecutive_failures++
+    if state == up and consecutive_failures &gt;= 3:
+      state = down; emit "device_down" event; raise alert
+</pre>
+
+<p>Tunable per-tenant (some tenants want sensitive thresholds, some want quiet ones).</p>
+
+<h2>The alert engine (rules that matter)</h2>
+
+<p>Every diff or state change generates a <code>discovery_event</code> row. The alert engine's job is to decide which events become outbound webhooks and which sit silently in the feed. Default rules:</p>
+
+<table>
+<tr><th>Event</th><th>Default action</th><th>Notes</th></tr>
+<tr><td><code>device_down</code> (after hysteresis)</td><td>Webhook + dashboard</td><td>The classic page.</td></tr>
+<tr><td><code>device_recovered</code></td><td>Dashboard only</td><td>Don't wake anyone up for good news.</td></tr>
+<tr><td><code>new_device_discovered</code></td><td>Dashboard, daily digest</td><td>Could be legit, could be a rogue. Daily summary, not real-time.</td></tr>
+<tr><td><code>device_disappeared</code> (7 days no contact)</td><td>Dashboard, weekly digest</td><td>Likely retired.</td></tr>
+<tr><td><code>device_moved_port</code> (same MAC, different switch port)</td><td>Webhook</td><td>Often interesting — laptop relocated, or worse, MAC spoofing.</td></tr>
+<tr><td><code>new_open_port_on_device</code></td><td>Webhook for "sensitive" ports (22, 3389, 5432, 1433); dashboard otherwise</td><td>Security signal.</td></tr>
+<tr><td><code>firewall_config_changed</code></td><td>Webhook with diff summary</td><td>Customers love this one.</td></tr>
+<tr><td><code>vpn_tunnel_dropped</code></td><td>Webhook</td><td>Branch connectivity loss.</td></tr>
+<tr><td><code>collector_offline</code></td><td>Webhook</td><td>If we don't hear from the collector for 5 minutes, the customer needs to know.</td></tr>
+</table>
+
+<p>Two safety rails:</p>
+<ol>
+<li><b>Per-tenant rate limit.</b> Cap webhooks at, say, 60 per hour per tenant. Above that, batch into a digest. Prevents an outage at one customer from drowning their alerting system.</li>
+<li><b>Deduplication window.</b> Same event for same entity within 15 minutes → counter increment, not a new webhook.</li>
+</ol>
+
+<h2>Observability of our own pipeline</h2>
+
+<p>We expose Prometheus metrics from both the API and each collector. The minimum useful set:</p>
+
+<table>
+<tr><th>Metric</th><th>Type</th><th>Why we care</th></tr>
+<tr><td><code>scan_jobs_enqueued_total{tenant, pillar}</code></td><td>Counter</td><td>Workload visibility</td></tr>
+<tr><td><code>scan_jobs_completed_total{tenant, pillar, status}</code></td><td>Counter</td><td>Success/failure tracking</td></tr>
+<tr><td><code>scan_job_duration_seconds{pillar}</code></td><td>Histogram</td><td>SLO: 99% &lt; 30 min</td></tr>
+<tr><td><code>scan_queue_depth{tenant}</code></td><td>Gauge</td><td>Backlog detection</td></tr>
+<tr><td><code>collector_connected{tenant, collector_id}</code></td><td>Gauge (0/1)</td><td>Collector health</td></tr>
+<tr><td><code>devices_total{tenant}</code></td><td>Gauge</td><td>Inventory size</td></tr>
+<tr><td><code>devices_down{tenant}</code></td><td>Gauge</td><td>Customer-visible outage size</td></tr>
+<tr><td><code>fusion_conflicts_total{rule}</code></td><td>Counter</td><td>Quality of fact fusion</td></tr>
+<tr><td><code>discovery_events_total{kind}</code></td><td>Counter</td><td>Tells you what your customers are seeing</td></tr>
+<tr><td><code>credential_decrypts_total{tenant}</code></td><td>Counter</td><td>Audit anomalies</td></tr>
+</table>
+
+<p>Build one Grafana dashboard that anyone in the team can open before a customer call: queue depth, error rate, collector heartbeats, top tenants by event count. It pays for itself the first time something goes wrong.</p>
+
+<h2>Step-by-step plan</h2>
+
+<h3>Step 1 — Wire scheduled jobs (NestJS)</h3>
+<p>You already have <code>ScheduleModule.forRoot()</code> in <code>app.module.ts</code>. Add a class <code>DiscoveryScheduler</code> in <code>discovery/scheduler.service.ts</code> with <code>@Cron</code> decorators for each cadence above. Each handler:</p>
+<ol>
+<li>Iterates active tenants.</li>
+<li>For each, reads tenant-specific overrides.</li>
+<li>Enqueues scan jobs via the dispatcher built in Chapter 0.</li>
+</ol>
+
+<h3>Step 2 — Stale-job sweeper</h3>
+<p>Every 15 min, find jobs <code>status=running</code> with <code>updated_at &lt; now() - 1 hour</code>. Mark them <code>timeout</code>. Write an event. Don't auto-retry — the next scheduled cadence will pick up new work.</p>
+
+<h3>Step 3 — Availability + lifecycle workers</h3>
+<p>Two background goroutines (or NestJS providers + cron):</p>
+<ul>
+<li><b>Availability worker</b> — runs liveness probes via collectors on the 5-minute cadence; updates state machine; emits events on transitions.</li>
+<li><b>Lifecycle worker</b> — daily; promotes devices to <code>decommissioned</code> and <code>archived</code> per thresholds.</li>
+</ul>
+
+<h3>Step 4 — Alert engine</h3>
+<p>Create <code>discovery/alerts/</code> with:</p>
+<ul>
+<li><code>alert-rules.entity.ts</code> — per-tenant configurable.</li>
+<li><code>alert-engine.service.ts</code> — listens to <code>discovery_event</code> inserts (Postgres LISTEN/NOTIFY again), checks rules, applies dedup + rate limit, fires webhook.</li>
+<li><code>webhook-dispatcher.service.ts</code> — uses backoff library for retry; dead-letter queue after 5 failures.</li>
+</ul>
+
+<h3>Step 5 — Metrics + structured logging</h3>
+<p>In NestJS, install <code>@willsoto/nestjs-prometheus</code> and expose <code>/metrics</code>. In the Go collector, add <code>github.com/prometheus/client_golang</code> and bind a small HTTP server on <code>127.0.0.1:9090</code> for local scraping (don't expose externally — collectors are inside customer networks). Collectors push their key metrics to the API as part of their heartbeat instead.</p>
+<p>Migrate logs to <code>zap</code> (Go) and <code>nestjs-pino</code> (NestJS). Every log line has <code>tenant_id</code>, <code>collector_id</code>, <code>job_id</code> when available.</p>
+
+<h3>Step 6 — Worker pools, backoff, retries (collector)</h3>
+<ol>
+<li>Wrap each pillar (firewall ingest, SNMP walk, active scan stage) in <code>ants</code> worker pools sized per CPU and per pillar.</li>
+<li>Around every external call (REST, SSH, SNMP), apply <code>cenkalti/backoff</code> with exponential delay capped at 5 minutes and ±25% jitter.</li>
+<li>Distinguish retryable (<code>5xx</code>, network timeout) from non-retryable (<code>4xx</code>, auth failure) errors. Don't retry forever on a 401.</li>
+</ol>
+
+<h3>Step 7 — Operator dashboard</h3>
+<p>A small page in the existing Next.js app: per-tenant queue depth, last-N events, last-N scan jobs with duration, collector heartbeats. This is internal-team-only — different from the customer-facing topology.</p>
+
+<h3>Step 8 — Documentation, runbooks, on-call</h3>
+<p>For every alert kind, write a short <em>runbook</em>: what triggered it, where to look, how to silence it for 1 hour for maintenance windows. Three pages of runbook prevents a hundred late-night calls.</p>
+
+<h2>How we test Chapter 5</h2>
+
+<div class="box">
+<b>Test 1 — Cadence works.</b>
+<ol>
+<li>Start the system. Wait one hour.</li>
+<li>Confirm: at least one liveness sweep, one SNMP inventory, one snapshot occurred for the test tenant.</li>
+<li>Each one has a <code>scan_job</code> row with <code>status=completed</code> and a non-zero duration.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — Hysteresis prevents flapping.</b>
+<ol>
+<li>Inject a sequence of liveness results: pass, fail, pass, fail, pass, pass.</li>
+<li>State should remain <code>up</code> throughout; zero alerts emitted.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — Real downstream alert.</b>
+<ol>
+<li>Power off a lab device.</li>
+<li>Within 15 minutes (5 min cadence + 3-strike hysteresis), webhook fires to a test endpoint.</li>
+<li>Power back on; recovery event lands in dashboard but no webhook fires.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — Stale job timeout.</b>
+<ol>
+<li>Start a scan; kill the collector mid-run.</li>
+<li>After ~15 min the sweeper marks the job <code>timeout</code>.</li>
+<li>Next scheduled cadence enqueues fresh work; old job not retried.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 5 — Rate-limit honoured under flood.</b>
+<ol>
+<li>Inject 1,000 device_down events for the same tenant in 1 minute.</li>
+<li>Confirm webhook count for that minute is ≤ rate limit; remaining events become a digest.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 6 — Lifecycle automation.</b>
+<ol>
+<li>Set a device's <code>last_seen_at</code> 8 days ago. Run lifecycle.</li>
+<li>Device flips to <code>decommissioned</code>.</li>
+<li>Set 95 days ago. Run again. Device flips to <code>archived</code>.</li>
+<li>Plug the device in; it reappears with state <code>active</code> + <code>up</code>; an "unexpected reappearance" event is logged for security review.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 7 — Soak test (the real one).</b>
+<ol>
+<li>Run the system end-to-end with a 100-device lab for 7 days.</li>
+<li>Audit on day 7: zero un-handled goroutine panics, snapshot table within retention bounds, alert volume sane, collector reconnects survived (kill it briefly each day), CPU/memory of API and collector flat over the week.</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>Cron-storm.</b> All your cron handlers fire at <code>:00:00</code> and overload the system once an hour. Always add per-handler jitter (0–60 s) to spread the load.</div>
+
+<div class="pitfall"><b>Hysteresis too aggressive.</b> Setting "5 misses to flip down" sounds safer but means you detect outages 25 minutes late. 3 misses with 5-minute cadence = 15 min worst case, which is a sensible default.</div>
+
+<div class="pitfall"><b>Webhook timeouts blocking the alert engine.</b> Use a separate retry queue and never block the event loop on a webhook call. Backoff queue must be persistent (Postgres rows), not in-memory.</div>
+
+<div class="pitfall"><b>Auto-retrying on 4xx.</b> A 401 is not a transient — your token is wrong. Retrying it 10 times in 30 minutes spams the customer's auth logs and the customer's auth team. Distinguish error classes; surface <code>auth_failure</code> as an actionable alert, not a retry storm.</div>
+
+<div class="pitfall"><b>Zombie observations.</b> If a session crashes after writing observations but before fusion runs, those observations may be partial. Always fuse on session-complete only, not session-in-progress.</div>
+
+<div class="pitfall"><b>Snapshot table growing forever.</b> Easy to forget the retention prune. Build it in week 1; verify table size bounded over a soak test.</div>
+
+<div class="pitfall"><b>Logs without tenant_id.</b> Two months in you'll be triaging a customer issue and discover the logs don't say which customer. Add <code>tenant_id</code> to every log line as a structured field — non-negotiable.</div>
+
+<div class="pitfall"><b>Alerts as a substitute for visibility.</b> If your only signal is "the alert hasn't fired," you don't know whether the system is healthy or just silently broken. Ship an "if no scans ran for tenant X in 24 h, page someone" meta-alert.</div>
+
+<div class="pitfall"><b>Maintenance windows ignored.</b> Customer says "we're upgrading our firewall on Saturday 02:00–04:00." You scan during that window, the firewall reboots, you alert "device_down" 30 times. Build a maintenance-window concept in the UI; suppress availability alerts for marked devices in the window.</div>
+
+<div class="pitfall"><b>One-tenant overload becoming a noisy neighbour.</b> A tenant with 5,000 devices runs full active scan and starves smaller tenants on the same collector pool. Add per-tenant queue weights and concurrency caps in the dispatcher.</div>
+
+<h2>Exit checklist (you can call the system production-ready when ALL are true)</h2>
+<ul>
+<li>☐ All cron cadences run for 7 days unattended without growing memory, queue, or table sizes beyond expected bounds.</li>
+<li>☐ Hysteresis verified end-to-end with a real device power-off / power-on test.</li>
+<li>☐ Stale-job sweeper marks <code>timeout</code> within ≤ 15 min after a collector kill.</li>
+<li>☐ Webhook delivery has retry + backoff + dead-letter and verified under flood.</li>
+<li>☐ Per-tenant rate limit honoured even under 1,000-event/min injection.</li>
+<li>☐ Lifecycle automation moves a synthetic device through active → decommissioned → archived.</li>
+<li>☐ Maintenance window suppresses alerts for marked devices.</li>
+<li>☐ Operator dashboard shows queue depth, success rate, collector heartbeats, top tenants — at a glance.</li>
+<li>☐ Every log line carries <code>tenant_id</code>; metrics are scrapeable; runbooks exist for every alert kind.</li>
+<li>☐ A "no-scans-in-24-h" meta-alert exists per tenant, so silence is not assumed to be health.</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 5 in 5 sentences</h3>
+<ol>
+<li>Each pillar has its own cadence: liveness 5 min, SNMP inventory hourly, active scan daily, firewall on-change + 6 h fallback, snapshots hourly.</li>
+<li>Two-axis state (lifecycle × availability) with hysteresis (3 misses to flip down, 2 to flip up) prevents alert flapping.</li>
+<li>The alert engine emits webhooks for events that matter, with per-tenant rate limit, dedup window, and persistent retry backoff — never block the event loop on a webhook call.</li>
+<li>Prometheus metrics + Zap/Pino structured logs (always tagged with <code>tenant_id</code>) + a Grafana dashboard make silent failures impossible to hide.</li>
+<li>A 7-day soak test on a real lab, plus runbooks for every alert kind and a "no-scans-in-24-h" meta-alert per tenant, is the real production-ready bar.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 5 of 6 — Operational Hardening (final)</div>
+
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 1 — Firewall Ingestor</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 1</div>
+<h1>The Firewall Ingestor</h1>
+<p class="subtitle">Reading the security guard's logbook</p>
+
+<h2>What this chapter is about</h2>
+<p>A perimeter firewall is the most knowledgeable single device in any organisation's network. Every branch office is connected through it, every public-facing service is mapped through it, every "trust this zone, distrust that zone" rule lives in it. If we can politely <em>copy</em> what the firewall already knows, we get a complete map of the company's network in one shot — without scanning anything ourselves yet.</p>
+
+<p>This chapter builds the <b>Firewall Ingestor</b>: a piece of code that logs into the firewall (read-only), pulls a fixed set of tables, and writes them into our database as observations.</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> Imagine a 30-storey office building with a security desk at the front gate. The guard has five register books on the desk: (1) which lifts go to which floors, (2) where every internal phone wire runs, (3) a logbook of every visitor who came in this morning, (4) the locked-tunnel map to other branch offices, and (5) the rule book of who is allowed where. We send a polite intern down to the desk, say "please can I photocopy these registers?", and walk away with a near-complete picture of the whole building. The guard never gets up; nothing in the building is disturbed. That intern is the Firewall Ingestor.
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>Firewall.</b> A device that sits between your internal network and the outside world (or between two zones), inspects every packet, and either lets it pass or blocks it. The Indian-English equivalent is "the network's gatekeeper."</div>
+
+<div class="term"><b>Perimeter firewall.</b> The firewall that sits at the very edge — between your office and the public Internet. The most senior gatekeeper in the building.</div>
+
+<div class="term"><b>Interface.</b> A physical or logical port on the firewall. <code>port1</code>, <code>ethernet1/3</code>, <code>vlan100</code>. Each has its own IP address and is connected to a different segment of the network.</div>
+
+<div class="term"><b>Route / Routing table.</b> A list of "if a packet wants to reach this network, send it to this neighbour next." Like a courier who knows "anything for South Mumbai goes to dispatch hub #7."</div>
+
+<div class="term"><b>ARP (Address Resolution Protocol).</b> The mechanism that maps an IP address to a MAC address on the same local network. The ARP table is "I just spoke to 192.168.1.50 and its hardware address is aa:bb:cc:11:22:33." Useful because it tells us a host actually exists right now.</div>
+
+<div class="term"><b>MAC (Media Access Control) address.</b> The hardware-burned-in address of a network card, like <code>aa:bb:cc:dd:ee:ff</code>. Globally unique. An IP can change; a MAC usually doesn't.</div>
+
+<div class="term"><b>NAT (Network Address Translation).</b> Rewriting addresses on the fly. Two flavours: <b>SNAT</b> (Source NAT — "many internal users appear to the Internet as one public IP") and <b>DNAT</b> (Destination NAT, also called a VIP — "anyone hitting our public IP on port 443 actually gets routed to internal server 10.0.5.20"). The DNAT table tells us which public services map to which internal hosts.</div>
+
+<div class="term"><b>VIP (Virtual IP).</b> Vendor name for a published service: a public-facing IP+port that maps to an internal host+port. Same idea as DNAT.</div>
+
+<div class="term"><b>Zone.</b> A named group of interfaces — "trust", "untrust", "dmz", "guest-wifi". Policy rules are written between zones: "allow from trust to dmz on port 443."</div>
+
+<div class="term"><b>VPN (Virtual Private Network) tunnel.</b> An encrypted pipe between two firewalls (typically HQ ↔ branch). The packets travel over the public Internet but inside the pipe they look like a single private network. A site-to-site IPSec tunnel binds two specific subnets together — the "proxy IDs" — and that binding is the most reliable way to learn that "branch Pune's 10.20.0.0/16 is reachable through this tunnel from HQ."</div>
+
+<div class="term"><b>BGP (Border Gateway Protocol) and OSPF (Open Shortest Path First).</b> Two protocols that let routers tell each other "I can reach network X." If your firewall speaks BGP/OSPF, its neighbour table is a free list of every other router in the company that's been advertised to it.</div>
+
+<div class="term"><b>API (Application Programming Interface).</b> The doorway we use to talk to the firewall programmatically — REST, XML, or SSH-CLI depending on vendor.</div>
+
+<div class="term"><b>REST (REpresentational State Transfer) API.</b> The modern style — HTTP requests, JSON responses. Easy.</div>
+
+<div class="term"><b>XML (eXtensible Markup Language) API.</b> The older style. Same idea but with XML responses. Palo Alto still uses this for live status data.</div>
+
+<div class="term"><b>CLI (Command Line Interface).</b> The text terminal you SSH into and type <code>show route</code> on. Slowest and most fragile, but sometimes the only option.</div>
+
+<div class="term"><b>SSH (Secure SHell).</b> Encrypted remote-terminal protocol. We log in over SSH, run commands, parse the output text.</div>
+
+<div class="term"><b>vsys / VDOM / context / VSX.</b> Vendor names for "many virtual firewalls inside one physical firewall." Palo Alto = vsys, Fortinet = VDOM, Cisco ASA = context, Check Point = VSX virtual system. If a customer has more than one of these, every API call must say which one you mean — otherwise you'll see only a slice of their network and think that's the whole picture.</div>
+
+<div class="term"><b>RBAC (Role-Based Access Control) read-only role.</b> A user account that can only read, never change anything. We <em>always</em> log into customer firewalls with this kind of account. If we make a bug, the worst we can do is read too much; we can never accidentally break their firewall config.</div>
+
+<h2>What we're building (the picture)</h2>
+
+<pre>
+   Customer's office                                 Our SaaS cloud
+   ─────────────────                                 ──────────────
+
+  ┌─────────────────────┐
+  │  Perimeter firewall │ ◄── HTTPS / SSH (read-only) ── ┌──────────────┐
+  │  PAN-OS / FortiGate │                                │              │
+  │  ASA / Check Point  │                                │  Collector   │
+  └─────────────────────┘                                │  (Go agent)  │
+   pulls these tables:                                   │              │
+   ─ interfaces                                          └──────┬───────┘
+   ─ routes                                                     │
+   ─ ARP                                                        │ WebSocket
+   ─ NAT (DNAT/VIP)                                             ▼
+   ─ zones + policies                                  ┌──────────────────┐
+   ─ VPN tunnels (proxy-IDs)                           │   NestJS API     │
+   ─ BGP/OSPF neighbours                               │   Postgres       │
+                                                       │                  │
+                                                       │ Stored as one    │
+                                                       │ DiscoverySession │
+                                                       │ + many           │
+                                                       │ Observations     │
+                                                       └──────────────────┘
+</pre>
+
+<h2>What we get from the firewall (and what we don't)</h2>
+
+<table>
+<tr><th>What the firewall can tell us</th><th>What it cannot</th></tr>
+<tr><td>Every subnet directly attached to it (HQ floors, DMZ, guest wifi)</td><td>Internal VLANs that exist behind a downstream switch</td></tr>
+<tr><td>Every remote subnet reachable via routing (branch offices)</td><td>How those remote subnets are wired internally</td></tr>
+<tr><td>Public-facing services (DNAT/VIP table)</td><td>Hostnames, OS, software running on each host</td></tr>
+<tr><td>Branch-to-HQ encrypted tunnels and the subnets they bind</td><td>Wireless clients, VMs sharing a hypervisor, IoT devices</td></tr>
+<tr><td>Hosts that have spoken through the firewall recently (ARP)</td><td>Hosts that have never ARPed through the firewall</td></tr>
+<tr><td>Inter-zone policy graph: "guest can reach Internet but not HR"</td><td>Whether the actual host on 10.0.5.42 is a printer or a server</td></tr>
+</table>
+
+<p><b>So what does Chapter 1 alone get us?</b> A complete <em>subnet</em> and <em>site</em> map. A list of branches and how they connect. The set of public services. A partial host list. We will close the host gap with SNMP (Chapter 2) and active probing (Chapter 3).</p>
+
+<h2>The four vendors, in plain English</h2>
+
+<p>We are going to support four vendors because they cover ~90% of enterprise customers. We build them <b>one at a time</b> — Fortinet first because it's the friendliest, Cisco ASA last because it's the most painful.</p>
+
+<h3>1. FortiGate (FortiOS 7.2 and newer) — start here</h3>
+<p>Modern REST API. JSON in, JSON out. Two endpoint families:</p>
+<ul>
+<li><code>/api/v2/cmdb/*</code> — the <b>configuration</b> (firewall.policy, system.zone, vpn.ipsec.phase1, etc.).</li>
+<li><code>/api/v2/monitor/*</code> — the <b>live state</b> (router/ipv4 = current routing table, system/arp, vpn/ipsec, router/bgp/neighbors, system/interface).</li>
+</ul>
+<p>Authentication is a bearer token from a "REST-API admin" user (<code>config system api-user</code>) limited to a read-only profile and locked to your collector's source IP (<code>trusthost</code>). One thing to remember: every URL must include <code>?vdom=...</code>, even if the customer only has one VDOM.</p>
+
+<h3>2. Palo Alto (PAN-OS 10.1 and newer)</h3>
+<p>Two APIs awkwardly stitched together:</p>
+<ul>
+<li><b>REST API</b> at <code>/restapi/v10.x/</code> — for <b>config</b> only (zones, policies, NAT rules, IPSec configuration). Clean JSON.</li>
+<li><b>XML API</b> at <code>/api/?type=op&cmd=...</code> — for <b>live state</b>. We send a tiny XML command like <code>&lt;show&gt;&lt;routing&gt;&lt;route/&gt;&lt;/routing&gt;&lt;/show&gt;</code> and get back a giant XML blob.</li>
+</ul>
+<p>Authentication is an API key obtained by POSTing to <code>/api/?type=keygen</code>. The key is bound to the admin password — if password rotates, the key silently dies.</p>
+
+<h3>3. Check Point (Gaia R81 and newer)</h3>
+<p>Three surfaces for one vendor (yes, really):</p>
+<ul>
+<li>The <b>gateway</b> itself exposes Gaia REST (<code>/gaia_api/v1.x/</code>) — interfaces, ARP, static routes.</li>
+<li>The <b>Security Management Server (SMS)</b> exposes the Management API (<code>mgmt_cli</code> over REST) — policies, NAT, VPN community objects, network objects.</li>
+<li>BGP/OSPF state and live IPSec tunnel state are not first-class in any REST endpoint — we fall back to <b>SSH clish</b> and run commands like <code>show bgp peers</code>, <code>vpn tu tlist</code>.</li>
+</ul>
+<p>If the customer uses VSX (multiple virtual systems on one physical box), every call needs a <code>vsid</code>; without it you only see VS0 and miss everything else.</p>
+
+<h3>4. Cisco ASA / Firepower (FTD) — keep for last</h3>
+<p>The painful one. Cisco's ASA REST API was deprecated and removed; the newer FTD has FDM/FMC REST APIs but they only cover <em>config</em>, never live route/ARP/session tables. So our primary path is <b>SSH scraping</b>:</p>
+<pre>
+ssh admin@asa-edge> show route
+                  > show arp
+                  > show nat detail
+                  > show crypto ipsec sa
+                  > show bgp summary
+                  > show ospf neighbor
+</pre>
+<p>We use a Go library called <b>scrapligo</b> to handle the SSH session and the prompt/pager dance, and a parser called <b>gotextfsm</b> with the open-source <b>ntc-templates</b> library to turn the text output into structured data. This is real work — plan two full sprints for ASA alone.</p>
+<p>Multi-context ASA: every command must run inside <code>changeto context &lt;name&gt;</code> first. Enumerate contexts, then loop.</p>
+
+<h2>Step-by-step plan</h2>
+
+<h3>Step 1 — Build the vendor-neutral interface</h3>
+<p>Define a Go interface in <code>internal/discovery/firewall/firewall.go</code>:</p>
+<pre>
+type Ingestor interface {
+    Login(ctx context.Context, creds Creds) error
+    ListContexts(ctx context.Context) ([]Context, error)
+    GetInterfaces(ctx context.Context, c Context) ([]Interface, error)
+    GetRoutes(ctx context.Context, c Context) ([]Route, error)
+    GetArpTable(ctx context.Context, c Context) ([]ArpEntry, error)
+    GetNatRules(ctx context.Context, c Context) ([]NatRule, error)
+    GetZones(ctx context.Context, c Context) ([]Zone, error)
+    GetPolicies(ctx context.Context, c Context) ([]Policy, error)
+    GetVpnTunnels(ctx context.Context, c Context) ([]VpnTunnel, error)
+    GetBgpNeighbors(ctx context.Context, c Context) ([]BgpNeighbor, error)
+    GetOspfNeighbors(ctx context.Context, c Context) ([]OspfNeighbor, error)
+    Logout() error
+}
+</pre>
+<p>Every vendor implementation satisfies this interface. The collector loop never knows which vendor it's talking to — it just calls <code>GetRoutes</code>.</p>
+
+<h3>Step 2 — Implement FortiGate first</h3>
+<ol>
+<li>Use plain <code>net/http</code>, not Fortinet's SDK (their SDK is glued to Terraform and clumsy for read-only ingestion).</li>
+<li>Define one Go struct per JSON response shape.</li>
+<li>Always paginate with <code>start=0&count=1000</code> and loop until response shorter than count.</li>
+<li>Discover VDOMs first (<code>/api/v2/cmdb/system/vdom</code>), then run every other call once per VDOM.</li>
+</ol>
+
+<h3>Step 3 — Implement Palo Alto next</h3>
+<ol>
+<li>For config endpoints: <code>github.com/PaloAltoNetworks/pango</code> is the official, generated SDK. Use it.</li>
+<li>For op-state (route, ARP, tunnel, BGP, OSPF): build small <code>net/http</code> + <code>encoding/xml</code> calls. The library doesn't help here.</li>
+<li>Discover virtual systems (<code>show system info</code> → multi-vsys flag, then <code>show vsys</code>) and scope every op-cmd with <code>&amp;target-vsys=vsys2</code> or run inside the vsys context.</li>
+<li>Group route entries by their <code>&lt;virtual-router&gt;</code> element — one PAN can have many VRs.</li>
+</ol>
+
+<h3>Step 4 — Implement Check Point</h3>
+<ol>
+<li>Login to Gaia REST: <code>POST /gaia_api/v1.5/login</code> → returns a <code>sid</code>. Use it as <code>X-chkp-sid</code> header.</li>
+<li>Login to the Management API: <code>POST /web_api/login</code> → returns a session id.</li>
+<li>For the gaps (<code>vpn tu</code>, BGP peers), fall back to SSH clish via <b>scrapligo</b>.</li>
+<li>If VSX, enumerate virtual systems and pass <code>vsid</code> on every call.</li>
+</ol>
+
+<h3>Step 5 — Implement Cisco ASA last</h3>
+<ol>
+<li>Connect with <b>scrapligo</b> using the <code>cisco_asa</code> platform — it knows the prompt, the <code>--More--</code> pager, and the <code>terminal pager 0</code> trick.</li>
+<li>Enumerate contexts with <code>show context</code>; loop with <code>changeto context &lt;name&gt;</code>.</li>
+<li>For each context, run our six show commands.</li>
+<li>Pipe the text through <b>gotextfsm</b> with the matching <b>ntc-templates</b> template (e.g. <code>cisco_asa_show_route.textfsm</code>) — get back structured records.</li>
+</ol>
+
+<h3>Step 6 — Stream observations back</h3>
+<p>For each table the ingestor returns, the collector wraps the rows in <code>ScanJobChunk</code> frames and sends them. Each row becomes one <code>observation</code> in Postgres, with <code>source_collector_id</code>, <code>session_id</code>, and <code>seen_at</code>. The post-processing service then upserts into <code>site</code>, <code>subnet</code>, <code>nat_rule</code>, <code>vpn_tunnel</code>, etc.</p>
+
+<h2>How we test Chapter 1</h2>
+
+<div class="box">
+<b>Lab setup.</b> Spin up free / eval images of all four vendors:
+<ul>
+<li>FortiGate VM eval (free 15-day evaluation license)</li>
+<li>Palo Alto PA-VM (eval available via partner channels)</li>
+<li>Cisco ASAv image (or use a real ASA in your lab)</li>
+<li>Check Point CloudGuard Network IaaS evaluation</li>
+</ul>
+Configure each with a small known topology: 2 sites, 1 IPSec tunnel between them, 2 internal subnets, 1 DNAT VIP.
+</div>
+
+<div class="box">
+<b>Test 1 — Identify subnets.</b>
+<ol>
+<li>Trigger an ingest job against vendor X.</li>
+<li>Confirm the produced subnet count matches what you configured. Off-by-one usually means you missed a sub-interface or a tunnel-bound network.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — Identify the VPN edge.</b>
+<ol>
+<li>Confirm the IPSec tunnel appears in the ingestor output with both sites' proxy-IDs.</li>
+<li>Confirm a <code>NeighborEdge</code> row of type <code>ipsec_tunnel</code> exists between Site-A and Site-B.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — DNAT/VIP discovery.</b>
+<ol>
+<li>Configure one VIP that maps <code>203.0.113.10:443</code> → <code>10.0.5.20:443</code>.</li>
+<li>Confirm <code>nat_rule</code> table has the right mapping with <code>direction=dst</code>.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — Multi-context.</b>
+<ol>
+<li>For Fortinet: configure 2 VDOMs, run ingest, confirm rows from both appear with <code>context</code> column populated.</li>
+<li>Repeat for Palo Alto vsys, ASA contexts, Check Point VSX.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 5 — Read-only proof.</b>
+<ol>
+<li>Snapshot the firewall config before ingest.</li>
+<li>Run ingest 100 times in a loop.</li>
+<li>Snapshot config after; the diff must be empty.</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>Multi-context blindness.</b> You forget to enumerate vsys/VDOM/context, and your ingestor only ever sees the default. The customer says "where's our DMZ?" and you have no answer. Always list contexts first; never assume one.</div>
+
+<div class="pitfall"><b>Pulling the session table by accident.</b> Some vendors have a <code>session</code> or <code>conntrack</code> table with millions of rows. It looks tempting ("look, every active connection!") but it's runtime noise, it changes every second, and it will OOM your collector. Stick to ARP for "who is alive."</div>
+
+<div class="pitfall"><b>Self-signed certificates.</b> Customers' firewalls almost always have self-signed TLS certs. Don't globally disable certificate verification — instead, store a per-tenant pinned certificate fingerprint in the credential vault, and only trust matches.</div>
+
+<div class="pitfall"><b>Ratecaps undocumented but real.</b> PAN-OS XML API runs on the management plane; if you parallelise more than ~4 calls, the firewall's web GUI for the customer's admin will stutter. FMC limits to 120 req/min/user. Build a per-vendor concurrency cap.</div>
+
+<div class="pitfall"><b>Treating "read-only" as truly read-only.</b> Some PAN op-commands trigger a commit-lock; some FortiOS read-only profiles still block <code>monitor/router/ipv4</code> on older builds. Always test with the exact role you'll ship, not with the global admin user.</div>
+
+<div class="pitfall"><b>Routes mis-keyed across VRs.</b> A multi-VR Palo Alto returns one big route blob; if you don't group by <code>&lt;virtual-router&gt;</code>, you'll have routes "from" the wrong router and incorrect topology edges.</div>
+
+<div class="pitfall"><b>API key invalidation on password rotation.</b> PAN-OS API keys are derived from the admin password. When the customer rotates the password (every 90 days under most security policies), your key dies silently and you stop ingesting. Detect 401s and surface an alert; don't retry forever.</div>
+
+<h2>Exit checklist (you can move to Chapter 2 only when ALL are true)</h2>
+<ul>
+<li>☐ All four vendors implement the <code>firewall.Ingestor</code> interface (or three, and ASA is on a backlog ticket with a clear plan).</li>
+<li>☐ Lab ingestion produces a subnet count matching ground truth for each vendor.</li>
+<li>☐ Multi-context customers are correctly fanned out (every vsys/VDOM/context/VSX appears).</li>
+<li>☐ VPN tunnel proxy-IDs become <code>NeighborEdge</code> rows linking the right Sites.</li>
+<li>☐ DNAT/VIP rules are stored with internal+external IP+port and direction.</li>
+<li>☐ A 100-iteration ingest loop produces a <em>zero-diff</em> on the firewall's running-config.</li>
+<li>☐ Self-signed certs handled per-tenant; no global skip-verify in production code.</li>
+<li>☐ A 401 from the firewall (e.g. password rotated) raises an actionable alert, not a silent retry storm.</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 1 in 5 sentences</h3>
+<ol>
+<li>The perimeter firewall already knows the company's subnets, branches, and rules — we politely copy that, we don't recreate it.</li>
+<li>Build a vendor-neutral Go interface; every vendor implementation behind it speaks the firewall's native API.</li>
+<li>Order: FortiGate (REST, easy) → Palo Alto (REST + XML) → Check Point (Gaia + SMS + clish) → Cisco ASA (SSH scraping with scrapligo + ntc-templates).</li>
+<li>Always enumerate vsys/VDOM/context/VSX first; everything else fans out per-context.</li>
+<li>Firewall ingestor gives us a complete subnet map but only a partial host map — Chapters 2 and 3 fill that gap.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 1 of 6 — Firewall Ingestor</div>
+
+</body>
+</html>

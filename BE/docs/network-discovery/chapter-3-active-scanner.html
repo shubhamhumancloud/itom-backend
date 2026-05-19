@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 3 — Active Scanner</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 3</div>
+<h1>The Active Scanner</h1>
+<p class="subtitle">Knocking on every door, politely</p>
+
+<h2>What this chapter is about</h2>
+<p>After Chapters 1 and 2, we know the subnets and the wiring. But we still don't have a complete <em>host</em> picture. A printer that never sent traffic through the firewall, a CCTV camera that the access switch sees only as "some MAC behind port 14", a developer's laptop powered on five minutes ago — these all need active investigation.</p>
+
+<p>So we walk every subnet, send a polite probe to every IP, and record who responds. For each responder we figure out: <em>is it alive?</em>, <em>what ports are open?</em>, <em>what does it identify itself as?</em>, <em>what operating system?</em>. The output is a host inventory with operating system, hostname, and open services.</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> You have the hallway map. You know there are 256 doors on floor 5. Now you walk along, knock on each door, listen for someone moving inside, and if they answer you ask "Hi, what's your name? What do you do here? What's your room number written above the door?" Most doors are empty. Some open immediately. A few open a tiny crack with a chain still on. You write all of it down. <em>That's the active scanner.</em>
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>Active scanning.</b> Sending probe packets to find out things. Contrast with "passive" (silently watching traffic). Active is faster and more complete; it's also visible to intrusion-detection systems, which is why we go gently.</div>
+
+<div class="term"><b>ICMP (Internet Control Message Protocol).</b> The protocol that <code>ping</code> uses. <code>ping 10.0.5.42</code> sends an ICMP echo-request and waits for an echo-reply. Many modern hosts (especially Windows) drop ICMP by default, so ICMP alone undercounts live hosts by 20–40%.</div>
+
+<div class="term"><b>ARP probe.</b> On the local broadcast domain, "ARP for 10.0.5.42" is more authoritative than ICMP — even hosts that block ICMP must answer ARP, otherwise they can't communicate at all. We use ARP probes whenever the target is on the same L2 segment as the collector.</div>
+
+<div class="term"><b>"TCP ping".</b> Connecting to a TCP port (typically 80, 443, 445) and seeing if it answers. A rejection ("port closed") still proves the host is alive — it's just not running that service. Catches hosts that block ICMP.</div>
+
+<div class="term"><b>TCP connect scan.</b> The simplest, no-privilege port scan: ask the OS to open a real TCP connection to a target port, and observe the result. Three outcomes: <em>open</em> (handshake completed), <em>closed</em> (RST received), <em>filtered</em> (no answer at all = firewall).</div>
+
+<div class="term"><b>SYN scan / half-open scan.</b> A faster scan that needs raw-socket privileges: send a SYN, wait for SYN-ACK, never complete the handshake. Tens of thousands of probes per second possible.</div>
+
+<div class="term"><b>Banner grab.</b> After connecting to an open port, read the first response without sending anything (or send a tiny request). Most services politely identify themselves: SSH says "SSH-2.0-OpenSSH_8.4", a web server says "Server: Apache/2.4.41", an SMB endpoint reveals the Windows build number, a TLS handshake reveals a certificate with the host's real name.</div>
+
+<div class="term"><b>OS fingerprinting.</b> Inferring the operating system from the way the host's TCP/IP stack behaves — the order of TCP options, the initial window size, retry timing. <b>Nmap</b>'s OS database has 15+ years of curated signatures and gets ~85–95% accuracy. Pure-Go fingerprinting without Nmap signatures gets 30–50%. We will shell out to Nmap when accuracy matters.</div>
+
+<div class="term"><b>SNMP probe.</b> Try the SNMP "system" group on port 161 with default communities (<code>public</code>, <code>private</code>) and tenant-supplied creds. <code>sysObjectID.0</code> is a vendor/model identifier far more reliable than parsing <code>sysDescr</code>.</div>
+
+<div class="term"><b>mDNS (Multicast DNS) / Bonjour.</b> A protocol where Macs, printers, and IoT shout their names on a multicast group every few seconds. One multicast packet from us, and we learn <code>printer-3rd-floor.local</code> with no work.</div>
+
+<div class="term"><b>NetBIOS Name Service.</b> Old Windows protocol on UDP/137. Still useful: many corporate Windows networks have incomplete DNS, and a NetBIOS name query gives you the hostname directly.</div>
+
+<div class="term"><b>WS-Discovery (Web Services Discovery).</b> A SOAP-over-multicast protocol used mostly by IP cameras, printers, and ONVIF devices. One probe packet → camera says "I am model X at this URL."</div>
+
+<div class="term"><b>SSDP (Simple Service Discovery Protocol) / UPnP.</b> Multicast probe used by smart-TVs, some media servers, IoT. Lower enterprise value than the above three, but cheap to add.</div>
+
+<div class="term"><b>IDS/IPS (Intrusion Detection / Prevention System).</b> Customer-side tooling that watches for "this looks like a port scanner." If we scan too fast or too aggressively, the customer's IDS will fire alerts and the customer's security team will call us at 3am. Going gently is non-negotiable.</div>
+
+<div class="term"><b>conntrack.</b> Linux kernel's connection-tracking table. If we open thousands of TCP connections per second, this fills up; the kernel starts dropping new connections. Bump <code>nf_conntrack_max</code> to 1,000,000 on the collector host.</div>
+
+<div class="term"><b>Npcap.</b> The library on Windows that lets us send raw packets. Required for SYN scan on Windows. <em>Note:</em> commercial OEM redistribution requires a paid licence — budget for it if you ship as SaaS on Windows collectors.</div>
+
+<h2>The probing pipeline (5 stages)</h2>
+
+<pre>
+   For each IP in the tenant's authorized CIDR:
+
+   ┌─ Stage 1 ─ Discovery (concurrent) ─────────────────────────┐
+   │  ARP probe (if on local L2)                                │
+   │  ICMP echo                                                 │
+   │  TCP "ping" to 80, 443, 445 — catches ICMP-blockers        │
+   │  → if any answers → host is alive; else → mark "no answer" │
+   └─────────────────────────────────────────────────────────────┘
+                               │ alive
+                               ▼
+   ┌─ Stage 2 ─ Port probe ─────────────────────────────────────┐
+   │  TCP connect to top-20 ports                               │
+   │  if anything found → expand to top-100                     │
+   │  ports: 22 80 443 445 3389 161 554 631 902 8080 8443       │
+   │         + 135 23 9100 5060 1433 3306 5432 5985 5986        │
+   └─────────────────────────────────────────────────────────────┘
+                               │ open ports
+                               ▼
+   ┌─ Stage 3 ─ Banner & protocol fingerprint ──────────────────┐
+   │  HTTP: read Server header, /favicon.ico hash               │
+   │  SSH: read first 64 bytes (SSH-2.0-...)                    │
+   │  SMB: send NEGOTIATE, parse server build number            │
+   │  TLS: handshake, read cert CN/SAN/issuer                   │
+   └─────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+   ┌─ Stage 4 ─ SNMP probe ─────────────────────────────────────┐
+   │  v2c with tenant communities                               │
+   │  v3 with tenant credentials                                │
+   │  → sysObjectID → vendor/model lookup                       │
+   └─────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+   ┌─ Stage 5 ─ Multicast service discovery (per subnet, once) ─┐
+   │  mDNS query for _services._dns-sd._udp                     │
+   │  NetBIOS NBSTAT                                            │
+   │  WS-Discovery probe                                        │
+   │  SSDP M-SEARCH                                             │
+   └─────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+   ┌─ Optional Stage 6 — Nmap deep dive (opt-in per scan job) ──┐
+   │  nmap -sV --script=banner,ssl-cert,smb-os-discovery -O     │
+   │  → 85–95% OS fingerprint accuracy                          │
+   └─────────────────────────────────────────────────────────────┘
+</pre>
+
+<h2>What we expect to learn from each stage</h2>
+
+<table>
+<tr><th>Stage</th><th>What we learn</th><th>What it costs us</th></tr>
+<tr><td>1 — Discovery</td><td>Live / dead</td><td>Tiny (3 packets/host)</td></tr>
+<tr><td>2 — Ports</td><td>What services are running</td><td>11–100 packets/host, must be rate-capped</td></tr>
+<tr><td>3 — Banners</td><td>Software versions, hostnames, certificate SAN</td><td>One full TCP connect per banner</td></tr>
+<tr><td>4 — SNMP</td><td>Vendor, model, exact device type</td><td>3–4 UDP packets if community right; otherwise nothing</td></tr>
+<tr><td>5 — Multicast</td><td>Printers, cameras, Macs, IoT names</td><td>One multicast packet per subnet</td></tr>
+<tr><td>6 — Nmap</td><td>Accurate OS fingerprint, vuln hints</td><td>Heavy; opt-in per scan</td></tr>
+</table>
+
+<h2>Step-by-step plan</h2>
+
+<h3>Step 1 — Privileges and platform setup</h3>
+<p>Active scanning is infrastructure work. Run the collector as:</p>
+<ul>
+<li><b>Linux:</b> with <code>CAP_NET_RAW</code> capability granted (<code>setcap cap_net_raw=+ep ./itom-collector</code>) — lets us send raw ICMP and SYN packets without full root.</li>
+<li><b>Windows:</b> as Administrator, with <b>Npcap</b> installed in WinPcap-API-compatible mode.</li>
+</ul>
+<p>If neither is available, fall back to TCP-connect-only mode (no raw ICMP, no SYN scan). Slower and less complete, but works.</p>
+
+<h3>Step 2 — Stage 1 discovery</h3>
+<ol>
+<li>Use <code>github.com/prometheus-community/pro-bing</code> (the maintained fork of go-ping) for ICMP.</li>
+<li>For ARP on local L2, use <code>github.com/google/gopacket</code> with raw AF_PACKET / Npcap.</li>
+<li>For TCP ping, just <code>net.DialTimeout</code> with a 1.5-second timeout.</li>
+<li>Run ARP, ICMP, and TCP-ping <em>concurrently</em>; mark host alive if any one succeeds.</li>
+</ol>
+
+<h3>Step 3 — Stage 2 port probe</h3>
+<ol>
+<li>Define a tiered port list. Top-20 first; only expand to top-100 if at least one port responded.</li>
+<li>Worker pool: 500–1,000 goroutines per collector. Above that, the Go scheduler thrashes and conntrack fills up.</li>
+<li>Per-host TCP connect timeout: 2 seconds.</li>
+<li>Rate-cap: <b>1,000 packets/sec per /24</b>, with ±25% jitter. Higher rates trigger Palo Alto / Firepower IDS.</li>
+</ol>
+
+<h3>Step 4 — Stage 3 banner grab</h3>
+<ol>
+<li>For HTTP: send <code>GET / HTTP/1.0\r\nHost: 10.0.5.42\r\n\r\n</code>, read first 4 KB, parse <code>Server</code> header.</li>
+<li>For SSH: just read 64 bytes after connect. The protocol mandates the banner is the first thing sent.</li>
+<li>For TLS (443, 8443, 993, etc.): full TLS handshake with hostname=IP, accept any cert, parse the certificate's CN and SubjectAltName. <em>Internal hostnames hide here.</em></li>
+<li>For SMB on 445: send a NEGOTIATE_PROTOCOL_REQUEST, parse the response's <code>OS</code> field. Free Windows OS fingerprint.</li>
+</ol>
+
+<h3>Step 5 — Stage 4 SNMP probe</h3>
+<ol>
+<li>For each tenant-configured community + the defaults <code>public</code>, <code>private</code>: try a single GET on <code>sysObjectID.0</code> with 1-second timeout.</li>
+<li>If response, also fetch <code>sysName.0</code>, <code>sysDescr.0</code>.</li>
+<li>Resolve <code>sysObjectID</code> against an embedded copy of the IANA Enterprise Numbers list to get vendor name (e.g., 1.3.6.1.4.1.9 = Cisco).</li>
+</ol>
+
+<h3>Step 6 — Stage 5 multicast (one per subnet)</h3>
+<ol>
+<li><b>mDNS:</b> use <code>github.com/hashicorp/mdns</code>. Send one query for <code>_services._dns-sd._udp.local</code>, listen 3 seconds.</li>
+<li><b>NetBIOS:</b> ~50 lines of UDP/137. Send NBSTAT query "*", parse the workstation/server name list.</li>
+<li><b>WS-Discovery:</b> SOAP envelope to <code>239.255.255.250:3702</code>. Listen 3 seconds.</li>
+<li><b>SSDP:</b> "M-SEARCH * HTTP/1.1" to <code>239.255.255.250:1900</code>. Listen 2 seconds.</li>
+</ol>
+
+<h3>Step 7 — Optional Nmap orchestration</h3>
+<p>Behind a feature flag <code>scan_job.deep_fingerprint</code>:</p>
+<ol>
+<li>Use <code>github.com/Ullaakut/nmap/v3</code> to run <code>nmap -sV -O --script=banner,ssl-cert,smb-os-discovery</code> against alive hosts.</li>
+<li>Parse the XML output back into our observation model.</li>
+<li>Cap at, say, 500 hosts per scan run; this is heavy.</li>
+</ol>
+<p>Nmap binary is ~30 MB. Bundle it with the collector or detect-and-skip if missing.</p>
+
+<h3>Step 8 — Multi-tenant guards (every probe goes through this)</h3>
+<p>Before any single packet leaves the collector, the target IP is checked against the signed CIDR allowlist from Chapter 0. No allowlist match → no packet. Audit row written. This is the single most important safety rail in the whole system.</p>
+
+<h2>Performance: what's realistic?</h2>
+
+<p>On a 4 vCPU, 1 Gbps collector VM scanning a /16 (65,536 addresses):</p>
+<table>
+<tr><th>Stage</th><th>Time</th><th>Notes</th></tr>
+<tr><td>Stage 1 discovery</td><td>5–10 minutes</td><td>1,000–2,000 packets/sec; 5–10% alive on average</td></tr>
+<tr><td>Stage 2 port probe (top 11) on alive</td><td>15–25 minutes</td><td>500–1,000 worker goroutines, 2-second timeout</td></tr>
+<tr><td>Stage 3 banners</td><td>5–10 minutes</td><td>Full TCP connect per banner; rate-bound</td></tr>
+<tr><td>Stage 4 SNMP probe</td><td>3–5 minutes</td><td>UDP, parallel, cheap</td></tr>
+<tr><td>Stage 5 multicast (256 subnets in /16)</td><td>15 minutes (sequential)</td><td>One probe per subnet, 3–5 sec listen each</td></tr>
+<tr><td>Stage 6 Nmap deep (opt-in, 500 hosts)</td><td>30–90 minutes</td><td>Don't run this every cycle</td></tr>
+</table>
+
+<p>Total non-Nmap pass on a /16: about <b>45–60 minutes</b>. A full /24 is comfortably under 2 minutes. This sets a sensible default cadence: daily for /16+, hourly for /24-sized branches.</p>
+
+<h2>How we test Chapter 3</h2>
+
+<div class="box">
+<b>Lab setup.</b> Build a known subnet with a mix of:
+<ul>
+<li>A Linux server (Ubuntu) — should fingerprint via SSH banner + ICMP-replies.</li>
+<li>A Windows server — should fingerprint via SMB negotiate + NetBIOS.</li>
+<li>A Mac laptop — should appear via mDNS.</li>
+<li>A network printer — should appear via WS-Discovery + SNMP sysObjectID.</li>
+<li>A Cisco switch — should appear via SNMP.</li>
+<li>An empty IP — must be marked dead, must never produce a fake observation.</li>
+</ul>
+</div>
+
+<div class="box">
+<b>Test 1 — ICMP-blocked host still found.</b>
+<ol>
+<li>On the Windows server, enable Windows Firewall (blocks ICMP by default).</li>
+<li>Run discovery; confirm host is still marked alive (TCP ping to 445 succeeded).</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — Banner accuracy.</b>
+<ol>
+<li>SSH banner of the Linux server appears verbatim in the <code>open_port</code> row.</li>
+<li>SMB banner contains the Windows OS build (e.g., "Windows Server 2019 Build 17763").</li>
+<li>TLS cert SAN of an internal HTTPS service appears as a discovered hostname.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — Multicast discovery.</b>
+<ol>
+<li>Power on a Mac in the lab subnet. Confirm its <code>.local</code> name appears via mDNS.</li>
+<li>Power on the network printer. Confirm WS-Discovery picks up its model.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — Rate cap.</b>
+<ol>
+<li>Run a full /24 scan with rate cap set to 100 pps.</li>
+<li>Use <code>tcpdump</code> to count packets per second; assert never exceeds 100 + jitter.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 5 — Allowlist enforcement.</b>
+<ol>
+<li>Configure tenant allowlist as <code>10.0.0.0/8</code>.</li>
+<li>Issue a scan job for <code>192.168.1.0/24</code>.</li>
+<li>Confirm: zero packets sent to 192.168.x.x; <code>ScanJobError</code> returned; audit row written.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 6 — Optional Nmap tier.</b>
+<ol>
+<li>With Nmap installed, enable <code>deep_fingerprint=true</code>.</li>
+<li>Verify OS field on the Linux server contains "Linux 5.x" with high accuracy from Nmap output.</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>IDS storm.</b> Scanning at full speed on a customer's prod network can trigger their IDS into "we are under attack" mode. Always rate-cap, jitter, and warn the customer's network team before the first scan.</div>
+
+<div class="pitfall"><b>Switch CPU spike from ARP storm.</b> A fast subnet sweep generates an ARP burst. Older / cheaper switches can spike to 90% CPU. Cap rate per /24, monitor switch CPU during early lab runs.</div>
+
+<div class="pitfall"><b>Conntrack exhaustion.</b> 1,000 worker goroutines × 2-sec timeouts × multiple subnets = quickly hits the default <code>nf_conntrack_max=65536</code>. Bump it to 1,000,000 and tune <code>nf_conntrack_tcp_timeout_*</code> values down.</div>
+
+<div class="pitfall"><b>Treating "no response" as "no host".</b> Could equally be a firewall, a host with strict iptables, or just a busy host. Mark it "no-response", not "dead." Dead requires explicit RST or unreachable.</div>
+
+<div class="pitfall"><b>Banner-grab to the wrong protocol.</b> Don't send HTTP request bytes to port 22 — you'll just confuse a sensitive SSH server and might trigger fail2ban. Map ports to protocol probers; never one-size-fits-all.</div>
+
+<div class="pitfall"><b>Default SNMP communities firing alerts.</b> Some IDS rules flag "<code>public</code> from outside" as a scanner signature. Try tenant-supplied creds first; only fall back to defaults if explicitly enabled per tenant.</div>
+
+<div class="pitfall"><b>Privilege drop after first packet.</b> On Linux, if you start as root then drop privs, raw sockets sometimes lose <code>CAP_NET_RAW</code>. Test the privilege-drop path explicitly.</div>
+
+<div class="pitfall"><b>Nmap binary as a security flag.</b> Some endpoint security agents flag <code>nmap.exe</code> as a hacking tool and quarantine it. Document this for customers; offer a non-Nmap mode.</div>
+
+<div class="pitfall"><b>Goroutine leak on context cancel.</b> If a scan is cancelled mid-sweep, every in-flight TCP-connect goroutine must respect the context. Audit this carefully — leaked goroutines pile up and eat memory over weeks.</div>
+
+<h2>Exit checklist (you can move to Chapter 4 only when ALL are true)</h2>
+<ul>
+<li>☐ Stages 1–5 implemented and tested against a mixed lab subnet (Linux/Windows/Mac/printer/switch).</li>
+<li>☐ ICMP-blocked Windows host still discovered via TCP ping.</li>
+<li>☐ Banner grab populates <code>open_port.banner</code> for HTTP, SSH, SMB, TLS.</li>
+<li>☐ TLS cert SAN appears as a discovered hostname.</li>
+<li>☐ mDNS, NetBIOS, WS-Discovery each produce at least one matched observation in lab.</li>
+<li>☐ Rate cap enforced and verified with packet capture.</li>
+<li>☐ Allowlist refusal verified — out-of-range targets produce zero packets.</li>
+<li>☐ Conntrack / file-descriptor / goroutine counts steady-state during a 4-hour soak test.</li>
+<li>☐ Nmap deep tier behind a feature flag, with graceful skip when binary missing.</li>
+<li>☐ Documented privilege requirements (CAP_NET_RAW on Linux, Administrator + Npcap on Windows).</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 3 in 5 sentences</h3>
+<ol>
+<li>Walk every IP in the tenant's authorized CIDRs and probe in five stages: discovery → ports → banners → SNMP → multicast.</li>
+<li>ICMP alone undercounts by 20–40%; always run ARP + ICMP + TCP-ping concurrently in stage 1.</li>
+<li>Banner grabs (HTTP, SSH, SMB-negotiate, TLS cert) plus SNMP sysObjectID give 70–85% device identification with pure Go.</li>
+<li>Multicast (mDNS, NetBIOS, WS-Discovery) costs one packet per subnet and catches 10–20% of devices the others miss — Macs, printers, cameras, IoT.</li>
+<li>Always rate-cap at ~1,000 packets/sec per /24 with jitter; check the signed CIDR allowlist on every single packet; offer Nmap as opt-in for deep OS fingerprint.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 3 of 6 — Active Scanner</div>
+
+</body>
+</html>

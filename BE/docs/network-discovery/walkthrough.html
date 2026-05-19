@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ITOM Network Discovery — Visual Walkthrough (Chapters 0–4)</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg-2: #11172e;
+    --fg: #e6ecff;
+    --muted: #94a3b8;
+    --accent: #60a5fa;
+    --green: #22c55e;
+    --red: #ef4444;
+    --cyan: #06b6d4;
+    --amber: #f59e0b;
+    --purple: #a78bfa;
+    --magenta: #d946ef;
+    --border: #1e293b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 800px at 20% -10%, #1a2347 0%, var(--bg) 60%) fixed;
+    color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden;
+  }
+  .player {
+    position: fixed; inset: 0;
+    display: grid;
+    grid-template-rows: 1fr auto;
+  }
+  .stage {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+  }
+  .scene {
+    position: absolute; inset: 0;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: 12px;
+    padding: 28px 40px 16px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 600ms ease, transform 600ms ease;
+    pointer-events: none;
+  }
+  .scene.active {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .scene h2 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+  }
+  .scene .chapter-tag {
+    display: inline-block;
+    font-size: 12px;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .scene svg { display: block; width: 100%; height: 100%; }
+  .stage-art { position: relative; overflow: hidden; }
+  .caption-area {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--fg);
+    min-height: 70px;
+    max-height: 110px;
+    overflow: auto;
+  }
+  .controls {
+    background: rgba(11, 16, 32, 0.94);
+    padding: 14px 24px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+  }
+  .btn {
+    background: var(--bg-2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 150ms ease;
+  }
+  .btn:hover { background: #1e2747; }
+  .btn.primary {
+    background: var(--accent);
+    color: #001027;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .progress-row { display: flex; flex-direction: column; gap: 6px; }
+  .progress {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress > div {
+    background: linear-gradient(90deg, var(--accent), var(--cyan));
+    height: 100%;
+    width: 0%;
+    transition: width 200ms linear;
+  }
+  .progress-meta {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--muted);
+  }
+  .voice-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .voice-row select {
+    background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px;
+    font-size: 12px;
+  }
+  .splash {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    background: rgba(11, 16, 32, 0.96);
+    z-index: 10;
+    backdrop-filter: blur(4px);
+  }
+  .splash-card {
+    max-width: 620px;
+    text-align: center;
+    padding: 32px;
+  }
+  .splash-card h1 {
+    font-size: 32px; margin: 0 0 12px;
+    background: linear-gradient(90deg, var(--accent), var(--cyan));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .splash-card p { color: var(--muted); line-height: 1.6; }
+  .splash-card .btn { margin-top: 16px; padding: 12px 24px; font-size: 16px; }
+
+  /* ============ Scene-specific art ============ */
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+  .draw-in { stroke-dasharray: 1000; stroke-dashoffset: 1000; }
+  .scene.active .draw-in { animation: draw 2.4s ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .pop-in { opacity: 0; transform: scale(0.8); transform-origin: center; }
+  .scene.active .pop-in { animation: pop 800ms ease-out forwards; }
+  @keyframes pop { to { opacity: 1; transform: scale(1); } }
+  .pop-in.delay-1 { animation-delay: 400ms !important; }
+  .pop-in.delay-2 { animation-delay: 800ms !important; }
+  .pop-in.delay-3 { animation-delay: 1200ms !important; }
+  .pop-in.delay-4 { animation-delay: 1600ms !important; }
+  .pop-in.delay-5 { animation-delay: 2000ms !important; }
+  .pop-in.delay-6 { animation-delay: 2400ms !important; }
+  .pop-in.delay-7 { animation-delay: 2800ms !important; }
+  .pop-in.delay-8 { animation-delay: 3200ms !important; }
+  .pop-in.delay-9 { animation-delay: 3600ms !important; }
+  .flow-arrow {
+    stroke: var(--accent);
+    stroke-width: 2;
+    fill: none;
+    marker-end: url(#arrow);
+    stroke-dasharray: 6 4;
+    animation: dash 1.4s linear infinite;
+  }
+  @keyframes dash { to { stroke-dashoffset: -10; } }
+
+  .node-label { font-size: 12px; fill: var(--fg); font-family: inherit; }
+  .node-sublabel { font-size: 10px; fill: var(--muted); font-family: inherit; }
+  .title-big {
+    font-size: 56px;
+    fill: var(--fg);
+    font-weight: 700;
+    font-family: inherit;
+  }
+  .title-sub {
+    font-size: 20px;
+    fill: var(--muted);
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+<div class="player">
+  <div class="stage" id="stage">
+    <!-- All scenes injected by JS for compactness, with SVG bodies inline below. -->
+    <div class="splash" id="splash">
+      <div class="splash-card">
+        <h1>ITOM Network Discovery — A Visual Walkthrough</h1>
+        <p>
+          Chapters 0 through 4 — foundation, firewall ingestor, SNMP crawler,
+          active scanner, fusion and topology UI. ~5 minutes, narrated.<br/><br/>
+          <strong>Headphones recommended.</strong> The narration is read aloud by
+          your browser. For best voices, view this in Microsoft Edge or
+          Google Chrome.
+        </p>
+        <button class="btn primary" id="start">▶ Start the walkthrough</button>
+        <p style="font-size:12px; margin-top: 18px;">
+          Want an MP4? Press <kbd>Win + G</kbd> and screen-record this window.
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <div style="display:flex; gap:8px;">
+      <button class="btn" id="prev" title="Previous">⏮</button>
+      <button class="btn" id="playPause" title="Play / Pause">▶</button>
+      <button class="btn" id="next" title="Next">⏭</button>
+      <button class="btn" id="restart" title="Restart">⟲</button>
+    </div>
+    <div class="progress-row">
+      <div class="progress"><div id="bar"></div></div>
+      <div class="progress-meta">
+        <span id="sceneLabel">Scene 0 of 13</span>
+        <span id="timeLabel">0:00 / 5:00</span>
+      </div>
+    </div>
+    <div class="voice-row">
+      <label for="voiceSel">Voice:</label>
+      <select id="voiceSel"></select>
+    </div>
+  </div>
+</div>
+
+<script>
+// ====================================================================
+// Scene definitions
+// ====================================================================
+// Each scene: { title, tag, narration, art (SVG string), minSeconds }
+// minSeconds is the visual floor — scene will not advance before this,
+// even if narration ends sooner. Narration is read aloud via the Web
+// Speech API; scene advances when narration ends AND minSeconds elapses.
+
+const SCENES = [
+  {
+    tag: "Walkthrough",
+    title: "ITOM Network Discovery",
+    narration:
+      "I T O M network discovery — a visual walkthrough of chapters zero through four. " +
+      "We will trace the journey from an empty database, all the way to a live, " +
+      "browsable network topology page.",
+    art: titleArt(),
+    minSeconds: 9,
+  },
+  {
+    tag: "The problem",
+    title: "Walking into an undocumented network",
+    narration:
+      "Imagine you walk into a customer site. There is a network — servers, firewalls, " +
+      "switches, workstations, printers. But there is no documentation. " +
+      "Where are the switches? Which ports go where? What is that one I P responding on the " +
+      "marketing subnet? Our job is to build a system that walks in, scans the network, " +
+      "and tells you everything that is there.",
+    art: problemArt(),
+    minSeconds: 22,
+  },
+  {
+    tag: "The big picture",
+    title: "Two halves, one collector",
+    narration:
+      "Two halves. The customer's network on the left. Our software-as-a-service on the right. " +
+      "In between, a single small Go daemon — the collector — installed once at each customer site. " +
+      "The collector and the cloud talk over an authenticated WebSocket.",
+    art: bigPictureArt(),
+    minSeconds: 18,
+  },
+  {
+    tag: "Chapter 0",
+    title: "Foundation — the plumbing",
+    narration:
+      "Chapter zero — the foundation. Before any scanning, we built the plumbing. " +
+      "Per-tenant tables in Postgres for scan jobs, observations, credentials, audit logs, and collectors. " +
+      "An envelope-encrypted credential vault, A E S two fifty-six dash G C M. " +
+      "An Ed two five five one nine signed CIDR allowlist — the collector cryptographically verifies " +
+      "it can only scan I Ps the operator approved. A WebSocket gateway at slash v one slash discovery slash w s. " +
+      "Postgres listen-and-notify dispatch with for update skip locked. " +
+      "A stale-job sweeper. And row-level-security policies for tenant isolation.",
+    art: chapter0Art(),
+    minSeconds: 32,
+  },
+  {
+    tag: "Chapter 1",
+    title: "Firewall ingestor — and the seed-and-crawl loop",
+    narration:
+      "Chapter one — the firewall ingestor. We built a vendor-neutral driver interface, " +
+      "then implemented the FortiGate REST driver. It pulls interfaces, routes, A R P tables, " +
+      "NAT rules, security zones, security policies, I P sec tunnels, B G P and O S P F state. " +
+      "But here is the twist: the perimeter at each customer might not be a FortiGate at all. " +
+      "So we added a fingerprint probe ladder — T C P, T L S, S S H banner, H T T P — " +
+      "that auto-detects what is actually listening on the seed I P. " +
+      "And a seed-and-crawl loop that follows the neighbours hop by hop. " +
+      "The perimeter becomes whatever the customer actually has.",
+    art: chapter1Art(),
+    minSeconds: 36,
+  },
+  {
+    tag: "Chapter 2",
+    title: "SNMP crawler — ten walkers, chassis dedup",
+    narration:
+      "Chapter two — the S N M P crawler. We built a g o s n m p wrapper with typed errors " +
+      "and ten table walkers — system info, interfaces, L L D P neighbours, C D P neighbours, " +
+      "A R P, forwarding database, routes, I P addresses, chassis identifier, and V L A N s. " +
+      "The crawler hops switch to switch using L L D P and C D P. " +
+      "It deduplicates by chassis I D, so the same physical switch never appears twice " +
+      "even when seen by five neighbours. " +
+      "Bounded concurrency. Per-device packets-per-second rate limiting. " +
+      "Backoff and blacklist after three failures. Full S N M P version three with auth and privacy. " +
+      "And the Cisco per V L A N forwarding database community trick.",
+    art: chapter2Art(),
+    minSeconds: 36,
+  },
+  {
+    tag: "Chapter 3",
+    title: "Active scanner — five-stage sweep, no admin needed",
+    narration:
+      "Chapter three — the active scanner. For everything S N M P and L L D P cannot see — " +
+      "workstations, printers, I o T cameras, B Y O D devices — we sweep entire I P ranges. " +
+      "Stage one: unprivileged I C M P plus a parallel T C P ping. " +
+      "Stage two: a T C P-connect scan of the top twenty ports. " +
+      "Stage three: banner grabs — H T T P server headers, S S H banners, T L S certificate subject names, " +
+      "F T P, S M T P, MySQL, P O P and I M A P greetings. " +
+      "Stage four: S N M P probe with tenant communities first. " +
+      "Stage five: multicast — m D N S, NetBIOS, W S Discovery, S S D P. " +
+      "Pure Go standard library throughout. No admin privileges. No N pcap. " +
+      "One binary, every operating system.",
+    art: chapter3Art(),
+    minSeconds: 36,
+  },
+  {
+    tag: "Chapter 4 — fusion",
+    title: "Fact fusion — one device per real device",
+    narration:
+      "Chapter four — fact fusion. Raw observations are powerful but noisy. " +
+      "The same firewall might appear in five L L D P frames from five different switches. " +
+      "So we built a fusion service. It reads every observation from one scan session " +
+      "and merges them into typed rows — one device per real device — using a precedence chain: " +
+      "chassis serial first, then MAC address, then I P. " +
+      "Source rank decides which value wins for each attribute: " +
+      "S N M P at one hundred, L L D P and C D P at fifty, fingerprint at forty, active scan banner at twenty. " +
+      "Everything wrapped in a single Postgres transaction. " +
+      "Idempotent — re-running produces the same end state.",
+    art: chapter4FusionArt(),
+    minSeconds: 30,
+  },
+  {
+    tag: "Chapter 4 — UI",
+    title: "The topology page",
+    narration:
+      "And the topology page. Three columns. " +
+      "On the left, a searchable device list. " +
+      "In the middle, a Cytoscape graph laid out by force-directed f cose physics. " +
+      "Nodes are coloured by kind — firewalls red, routers blue, switches cyan, " +
+      "servers green, workstations purple, printers magenta. " +
+      "Border colour shows availability — green for up, red for down. " +
+      "Edges are styled by protocol — L L D P solid grey, C D P dashed cyan, " +
+      "layer three adjacency dotted purple, I P sec tunnels heavy dashed green. " +
+      "Click any node — the right panel shows identity, interfaces, I P bindings, " +
+      "open ports, and a per-device discovery event feed.",
+    art: chapter4UIArt(),
+    minSeconds: 32,
+  },
+  {
+    tag: "Live demo",
+    title: "Seed demo data — 19 devices, 24 edges",
+    narration:
+      "Click 'Seed demo data' on the topology page, and within a second " +
+      "the system plants a nineteen-device enterprise reference network. " +
+      "Two I S P routers. Two perimeter A S A firewalls. A D M Z A S A and server. " +
+      "Two data center routers. A data center server. Two campus cores. " +
+      "Two distribution switches. Two access switches. And four end-user workstations. " +
+      "Twenty-four L L D P edges connect them. The graph renders, ready for inspection.",
+    art: liveDemoArt(),
+    minSeconds: 28,
+  },
+  {
+    tag: "Cross-cutting",
+    title: "One binary, every operating system",
+    narration:
+      "Cross-cutting work. A binary patcher that bakes five placeholders into the Go binary at install time: " +
+      "tenant I D, server U R L, collector I D, auth token, and the Ed two five five one nine public key " +
+      "for the CIDR allowlist. A per-tenant install download endpoint. " +
+      "The same binary runs unchanged on Linux, macOS, and Windows — no admin privileges, no N pcap.",
+    art: crossCuttingArt(),
+    minSeconds: 22,
+  },
+  {
+    tag: "What's next",
+    title: "The road from here",
+    narration:
+      "What is still to come. Chapter five and beyond. " +
+      "Topology snapshots with diff and retention. A time slider in the U I to see the network as it looked an hour ago. " +
+      "V R R P and H S R P redundancy pair modelling. Port-channel and ether-channel aggregation. " +
+      "Cisco A S A N A T and V P N extraction. And alerting on top of the discovery feed.",
+    art: roadmapArt(),
+    minSeconds: 20,
+  },
+  {
+    tag: "Complete",
+    title: "Chapters 0 — 4, shipped",
+    narration:
+      "I T O M network discovery. Chapters zero through four, complete. Thanks for watching.",
+    art: outroArt(),
+    minSeconds: 7,
+  },
+];
+
+// ====================================================================
+// SVG art generators — each returns an SVG string
+// ====================================================================
+function titleArt() {
+  return `
+  <svg viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.4"/>
+        <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="600" cy="280" r="280" fill="url(#glow)" class="pulse"/>
+    <text class="title-big" x="600" y="280" text-anchor="middle">ITOM</text>
+    <text class="title-big" x="600" y="350" text-anchor="middle" style="font-size:40px">Network Discovery</text>
+    <text class="title-sub" x="600" y="400" text-anchor="middle">Chapters 0 — 4 · A Visual Walkthrough</text>
+    <!-- ambient network nodes -->
+    ${ambientNodes(20)}
+  </svg>`;
+}
+
+function ambientNodes(n) {
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const x = 50 + Math.random() * 1100;
+    const y = 50 + Math.random() * 500;
+    const r = 2 + Math.random() * 3;
+    s += `<circle cx="${x}" cy="${y}" r="${r}" fill="#60a5fa" opacity="${0.15 + Math.random()*0.4}" class="pulse"/>`;
+  }
+  return s;
+}
+
+function problemArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="60" text-anchor="middle" class="title-sub" style="font-size:18px">An undocumented network</text>
+
+    <!-- Random network devices with question marks -->
+    ${deviceIcon(200, 200, 'firewall', 'firewall?', '#ef4444')}
+    ${deviceIcon(420, 160, 'router', 'router?', '#60a5fa')}
+    ${deviceIcon(640, 180, 'switch', 'switch?', '#06b6d4')}
+    ${deviceIcon(860, 220, 'switch', 'switch?', '#06b6d4')}
+    ${deviceIcon(320, 380, 'server', 'server?', '#22c55e')}
+    ${deviceIcon(560, 420, 'workstation', 'PC?', '#a78bfa')}
+    ${deviceIcon(780, 400, 'printer', 'printer?', '#d946ef')}
+    ${deviceIcon(980, 380, 'iot', 'IoT?', '#f59e0b')}
+
+    <!-- Floating question marks -->
+    <text x="260" y="140" font-size="60" fill="#ef4444" class="pulse" font-weight="700">?</text>
+    <text x="480" y="100" font-size="48" fill="#60a5fa" class="pulse" font-weight="700">?</text>
+    <text x="700" y="120" font-size="52" fill="#06b6d4" class="pulse" font-weight="700">?</text>
+    <text x="920" y="160" font-size="46" fill="#06b6d4" class="pulse" font-weight="700">?</text>
+    <text x="380" y="500" font-size="44" fill="#22c55e" class="pulse" font-weight="700">?</text>
+    <text x="620" y="520" font-size="50" fill="#a78bfa" class="pulse" font-weight="700">?</text>
+    <text x="840" y="500" font-size="42" fill="#d946ef" class="pulse" font-weight="700">?</text>
+    <text x="1040" y="480" font-size="48" fill="#f59e0b" class="pulse" font-weight="700">?</text>
+  </svg>`;
+}
+
+function bigPictureArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <!-- Customer site box -->
+    <rect x="60" y="80" width="460" height="440" rx="14" fill="#11172e" stroke="#1e293b" stroke-width="2"/>
+    <text x="290" y="120" text-anchor="middle" fill="#60a5fa" font-size="14" letter-spacing="2">CUSTOMER SITE</text>
+    ${deviceIcon(160, 220, 'firewall', 'firewall', '#ef4444')}
+    ${deviceIcon(290, 220, 'switch', 'switch', '#06b6d4')}
+    ${deviceIcon(420, 220, 'router', 'router', '#60a5fa')}
+    ${deviceIcon(200, 380, 'server', 'server', '#22c55e')}
+    ${deviceIcon(340, 400, 'workstation', 'PC', '#a78bfa')}
+    ${deviceIcon(450, 380, 'printer', 'printer', '#d946ef')}
+
+    <!-- Collector daemon -->
+    <rect x="170" y="460" width="240" height="40" rx="10" fill="#0b1020" stroke="#60a5fa" stroke-width="2" class="pop-in delay-2"/>
+    <text x="290" y="485" text-anchor="middle" fill="#60a5fa" font-size="13" font-weight="600" class="pop-in delay-2">itom-collector daemon (Go)</text>
+
+    <!-- Cloud box -->
+    <rect x="680" y="80" width="460" height="440" rx="14" fill="#11172e" stroke="#1e293b" stroke-width="2"/>
+    <text x="910" y="120" text-anchor="middle" fill="#22c55e" font-size="14" letter-spacing="2">OUR SAAS</text>
+    <rect x="730" y="160" width="360" height="60" rx="8" fill="#0b1020" stroke="#1e293b" class="pop-in delay-3"/>
+    <text x="910" y="195" text-anchor="middle" fill="#e6ecff" font-size="14" class="pop-in delay-3">NestJS server · /v1/discovery/ws</text>
+    <rect x="730" y="240" width="360" height="60" rx="8" fill="#0b1020" stroke="#1e293b" class="pop-in delay-4"/>
+    <text x="910" y="275" text-anchor="middle" fill="#e6ecff" font-size="14" class="pop-in delay-4">Postgres · disc_* tables</text>
+    <rect x="730" y="320" width="360" height="60" rx="8" fill="#0b1020" stroke="#1e293b" class="pop-in delay-5"/>
+    <text x="910" y="355" text-anchor="middle" fill="#e6ecff" font-size="14" class="pop-in delay-5">Fusion service → typed topology</text>
+    <rect x="730" y="400" width="360" height="60" rx="8" fill="#0b1020" stroke="#1e293b" class="pop-in delay-6"/>
+    <text x="910" y="435" text-anchor="middle" fill="#e6ecff" font-size="14" class="pop-in delay-6">Next.js frontend · Cytoscape graph</text>
+
+    <!-- WebSocket arrow -->
+    <line x1="410" y1="480" x2="730" y2="190" class="flow-arrow"/>
+    <text x="570" y="320" text-anchor="middle" fill="#60a5fa" font-size="13" class="pop-in delay-1">authenticated WebSocket</text>
+  </svg>`;
+}
+
+function chapter0Art() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="50" text-anchor="middle" class="title-sub" style="font-size:18px">Foundation: tables, vault, signing, dispatch</text>
+
+    <!-- Postgres tables -->
+    <g class="pop-in">
+      ${tableBox(80, 110, 'disc_scan_job', ['id', 'tenant_id', 'pillar', 'status', 'target_spec'])}
+    </g>
+    <g class="pop-in delay-1">
+      ${tableBox(310, 110, 'disc_observation', ['session_id', 'subject_kind', 'subject_key', 'attribute', 'value'])}
+    </g>
+    <g class="pop-in delay-2">
+      ${tableBox(540, 110, 'disc_credential', ['name', 'kind', 'cipher_blob', 'iv', 'auth_tag'])}
+    </g>
+    <g class="pop-in delay-3">
+      ${tableBox(770, 110, 'disc_audit_log', ['actor', 'action', 'subject', 'at'])}
+    </g>
+    <g class="pop-in delay-4">
+      ${tableBox(1000, 110, 'disc_collector', ['name', 'token_hash', 'cidrs', 'status'])}
+    </g>
+
+    <!-- Vault -->
+    <g class="pop-in delay-5">
+      <rect x="100" y="340" width="260" height="90" rx="12" fill="#0b1020" stroke="#22c55e" stroke-width="2"/>
+      <text x="230" y="380" text-anchor="middle" fill="#22c55e" font-size="14" letter-spacing="2">CREDENTIAL VAULT</text>
+      <text x="230" y="405" text-anchor="middle" fill="#94a3b8" font-size="12">AES-256-GCM, envelope encryption</text>
+    </g>
+
+    <!-- Signing -->
+    <g class="pop-in delay-6">
+      <rect x="400" y="340" width="260" height="90" rx="12" fill="#0b1020" stroke="#60a5fa" stroke-width="2"/>
+      <text x="530" y="380" text-anchor="middle" fill="#60a5fa" font-size="14" letter-spacing="2">CIDR ALLOWLIST</text>
+      <text x="530" y="405" text-anchor="middle" fill="#94a3b8" font-size="12">Ed25519-signed, collector verifies</text>
+    </g>
+
+    <!-- Dispatch -->
+    <g class="pop-in delay-7">
+      <rect x="700" y="340" width="260" height="90" rx="12" fill="#0b1020" stroke="#f59e0b" stroke-width="2"/>
+      <text x="830" y="380" text-anchor="middle" fill="#f59e0b" font-size="14" letter-spacing="2">DISPATCH</text>
+      <text x="830" y="405" text-anchor="middle" fill="#94a3b8" font-size="12">LISTEN/NOTIFY + SKIP LOCKED</text>
+    </g>
+
+    <!-- RLS -->
+    <g class="pop-in delay-8">
+      <rect x="1000" y="340" width="160" height="90" rx="12" fill="#0b1020" stroke="#a78bfa" stroke-width="2"/>
+      <text x="1080" y="380" text-anchor="middle" fill="#a78bfa" font-size="14" letter-spacing="2">RLS</text>
+      <text x="1080" y="405" text-anchor="middle" fill="#94a3b8" font-size="12">tenant isolation</text>
+    </g>
+
+    <!-- WS line at bottom -->
+    <g class="pop-in delay-9">
+      <rect x="200" y="480" width="800" height="60" rx="12" fill="#0b1020" stroke="#06b6d4" stroke-width="2"/>
+      <text x="600" y="518" text-anchor="middle" fill="#06b6d4" font-size="14">WebSocket gateway · /v1/discovery/ws · scan_job.assign · scan_job.chunk · scan_job.done</text>
+    </g>
+  </svg>`;
+}
+
+function chapter1Art() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="50" text-anchor="middle" class="title-sub" style="font-size:18px">Firewall ingestor + fingerprint probe ladder</text>
+
+    <!-- Firewall in center -->
+    ${deviceIcon(560, 240, 'firewall', 'FortiGate', '#ef4444', 60, 60)}
+    <text x="600" y="340" text-anchor="middle" fill="#94a3b8" font-size="12">REST · read-only</text>
+
+    <!-- Outgoing data arrows -->
+    ${dataArrow(600, 240, 200, 130, 'interfaces', 0)}
+    ${dataArrow(600, 240, 420, 100, 'routes', 1)}
+    ${dataArrow(600, 240, 700, 100, 'ARP', 2)}
+    ${dataArrow(600, 240, 920, 130, 'NAT', 3)}
+    ${dataArrow(600, 240, 1040, 240, 'zones', 4)}
+    ${dataArrow(600, 240, 1040, 380, 'policies', 5)}
+    ${dataArrow(600, 240, 920, 480, 'IPsec', 6)}
+    ${dataArrow(600, 240, 700, 520, 'BGP', 7)}
+    ${dataArrow(600, 240, 420, 520, 'OSPF', 8)}
+
+    <!-- Probe ladder -->
+    <g class="pop-in delay-3">
+      <rect x="80" y="380" width="280" height="160" rx="12" fill="#0b1020" stroke="#60a5fa" stroke-width="2"/>
+      <text x="220" y="410" text-anchor="middle" fill="#60a5fa" font-size="14" letter-spacing="2">FINGERPRINT LADDER</text>
+      <text x="100" y="440" fill="#e6ecff" font-size="13">→ TCP open?</text>
+      <text x="100" y="465" fill="#e6ecff" font-size="13">→ TLS cert?</text>
+      <text x="100" y="490" fill="#e6ecff" font-size="13">→ SSH banner?</text>
+      <text x="100" y="515" fill="#e6ecff" font-size="13">→ HTTP /api/v2?</text>
+      <text x="100" y="540" fill="#22c55e" font-size="13">→ vendor=fortinet</text>
+    </g>
+  </svg>`;
+}
+
+function chapter2Art() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="40" text-anchor="middle" class="title-sub" style="font-size:18px">SNMP crawler — 10 walkers + chassis dedup</text>
+
+    <!-- Switch in center -->
+    ${deviceIcon(600, 300, 'switch', 'switch', '#06b6d4', 56, 56)}
+    <text x="600" y="380" text-anchor="middle" fill="#94a3b8" font-size="11">SNMPv2c / v3 (USM)</text>
+
+    <!-- 10 walker boxes around it -->
+    ${walkerBox(120, 80,  'system info',  0)}
+    ${walkerBox(330, 70,  'interfaces',   1)}
+    ${walkerBox(540, 70,  'LLDP',         2)}
+    ${walkerBox(750, 70,  'CDP',          3)}
+    ${walkerBox(960, 80,  'ARP',          4)}
+    ${walkerBox(960, 480, 'FDB',          5)}
+    ${walkerBox(750, 500, 'routes',       6)}
+    ${walkerBox(540, 500, 'IP addresses', 7)}
+    ${walkerBox(330, 500, 'chassis ID',   8)}
+    ${walkerBox(120, 480, 'VLANs',        9)}
+
+    <!-- Lines from switch to each walker -->
+    ${walkerLine(600, 300, 175, 110)}
+    ${walkerLine(600, 300, 385, 100)}
+    ${walkerLine(600, 300, 595, 100)}
+    ${walkerLine(600, 300, 805, 100)}
+    ${walkerLine(600, 300, 1015, 110)}
+    ${walkerLine(600, 300, 1015, 510)}
+    ${walkerLine(600, 300, 805, 530)}
+    ${walkerLine(600, 300, 595, 530)}
+    ${walkerLine(600, 300, 385, 530)}
+    ${walkerLine(600, 300, 175, 510)}
+  </svg>`;
+}
+
+function chapter3Art() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="40" text-anchor="middle" class="title-sub" style="font-size:18px">Active scanner — 5 stages, unprivileged, cross-platform</text>
+
+    <!-- CIDR cloud -->
+    <g class="pop-in">
+      <rect x="60" y="240" width="200" height="100" rx="50" fill="#0b1020" stroke="#60a5fa" stroke-width="2"/>
+      <text x="160" y="280" text-anchor="middle" fill="#60a5fa" font-size="14" font-weight="600">CIDR</text>
+      <text x="160" y="305" text-anchor="middle" fill="#94a3b8" font-size="12">192.168.0.0/24</text>
+      <text x="160" y="325" text-anchor="middle" fill="#94a3b8" font-size="12">signed allowlist</text>
+    </g>
+
+    <!-- 5 stages in column -->
+    ${stageBox(330,  80, '1', 'ICMP + TCP ping',           '#22c55e', 0)}
+    ${stageBox(330, 180, '2', 'TCP-connect (top 20 ports)', '#06b6d4', 1)}
+    ${stageBox(330, 280, '3', 'Banner grabs (HTTP/SSH/TLS)', '#a78bfa', 2)}
+    ${stageBox(330, 380, '4', 'SNMP probe',                '#f59e0b', 3)}
+    ${stageBox(330, 480, '5', 'Multicast (mDNS/SSDP/WSD)',  '#ef4444', 4)}
+
+    <!-- arrow from cidr to stages -->
+    <path d="M 260 290 L 320 290" class="flow-arrow"/>
+
+    <!-- Output: discovered devices -->
+    ${deviceIcon(820, 100, 'workstation', 'workstation', '#a78bfa', 32, 32)}
+    ${deviceIcon(900, 100, 'printer', 'printer', '#d946ef', 32, 32)}
+    ${deviceIcon(820, 200, 'server', 'server', '#22c55e', 32, 32)}
+    ${deviceIcon(900, 200, 'iot', 'IoT cam', '#f59e0b', 32, 32)}
+    ${deviceIcon(820, 300, 'workstation', 'phone', '#a78bfa', 32, 32)}
+    ${deviceIcon(900, 300, 'workstation', 'Mac', '#a78bfa', 32, 32)}
+    ${deviceIcon(820, 400, 'workstation', 'Win10', '#a78bfa', 32, 32)}
+    ${deviceIcon(900, 400, 'server', 'NAS', '#22c55e', 32, 32)}
+
+    <!-- arrows out -->
+    <path d="M 620 290 L 800 200" class="flow-arrow"/>
+    <path d="M 620 290 L 800 350" class="flow-arrow"/>
+
+    <!-- OS labels -->
+    <g class="pop-in delay-5">
+      <rect x="1020" y="180" width="140" height="220" rx="12" fill="#0b1020" stroke="#1e293b"/>
+      <text x="1090" y="210" text-anchor="middle" fill="#94a3b8" font-size="12" letter-spacing="1">RUNS ON</text>
+      <text x="1090" y="250" text-anchor="middle" fill="#22c55e" font-size="22">🐧 Linux</text>
+      <text x="1090" y="295" text-anchor="middle" fill="#22c55e" font-size="22">🍎 macOS</text>
+      <text x="1090" y="340" text-anchor="middle" fill="#22c55e" font-size="22">🪟 Windows</text>
+      <text x="1090" y="380" text-anchor="middle" fill="#94a3b8" font-size="11">no admin, no Npcap</text>
+    </g>
+  </svg>`;
+}
+
+function chapter4FusionArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="40" text-anchor="middle" class="title-sub" style="font-size:18px">Fusion — observations to typed topology rows</text>
+
+    <!-- Observations as colored dots on the left -->
+    <text x="180" y="90" text-anchor="middle" fill="#94a3b8" font-size="12" letter-spacing="2">RAW OBSERVATIONS</text>
+    ${observation(80, 130, 'SNMP', '#22c55e', 0)}
+    ${observation(80, 170, 'LLDP', '#06b6d4', 1)}
+    ${observation(80, 210, 'LLDP', '#06b6d4', 2)}
+    ${observation(80, 250, 'LLDP', '#06b6d4', 3)}
+    ${observation(80, 290, 'CDP',  '#06b6d4', 4)}
+    ${observation(80, 330, 'fingerprint', '#a78bfa', 5)}
+    ${observation(80, 370, 'active scan', '#f59e0b', 6)}
+    ${observation(80, 410, 'banner', '#f59e0b', 7)}
+    ${observation(80, 450, 'mDNS', '#ef4444', 8)}
+
+    <!-- Funnel -->
+    <path d="M 350 140 L 700 270 L 700 330 L 350 460 Z" fill="#11172e" stroke="#60a5fa" stroke-width="2" class="pop-in delay-3"/>
+    <text x="525" y="290" text-anchor="middle" fill="#60a5fa" font-size="18" font-weight="700" class="pop-in delay-3">Fusion</text>
+    <text x="525" y="315" text-anchor="middle" fill="#94a3b8" font-size="12" class="pop-in delay-3">chassis → MAC → IP</text>
+
+    <!-- Source rank table -->
+    <g class="pop-in delay-4">
+      <rect x="380" y="350" width="290" height="110" rx="8" fill="#0b1020" stroke="#1e293b"/>
+      <text x="525" y="375" text-anchor="middle" fill="#94a3b8" font-size="11" letter-spacing="2">SOURCE RANK</text>
+      <text x="400" y="395" fill="#22c55e" font-size="12">SNMP</text><text x="650" y="395" text-anchor="end" fill="#e6ecff" font-size="12">100</text>
+      <text x="400" y="415" fill="#06b6d4" font-size="12">LLDP / CDP</text><text x="650" y="415" text-anchor="end" fill="#e6ecff" font-size="12">50</text>
+      <text x="400" y="435" fill="#a78bfa" font-size="12">fingerprint</text><text x="650" y="435" text-anchor="end" fill="#e6ecff" font-size="12">40</text>
+      <text x="400" y="455" fill="#f59e0b" font-size="12">active banner</text><text x="650" y="455" text-anchor="end" fill="#e6ecff" font-size="12">20</text>
+    </g>
+
+    <!-- Typed output -->
+    <text x="940" y="90" text-anchor="middle" fill="#94a3b8" font-size="12" letter-spacing="2">TYPED ROWS</text>
+    ${typedBox(780, 110, 'disc_device',         5)}
+    ${typedBox(780, 170, 'disc_iface',          6)}
+    ${typedBox(780, 230, 'disc_ip_binding',     7)}
+    ${typedBox(780, 290, 'disc_neighbor_edge',  8)}
+    ${typedBox(780, 350, 'disc_open_port',      9)}
+    ${typedBox(780, 410, 'disc_event',          10)}
+
+    <path d="M 700 300 L 770 300" class="flow-arrow"/>
+  </svg>`;
+}
+
+function chapter4UIArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="40" text-anchor="middle" class="title-sub" style="font-size:18px">Discovery Topology page — three columns</text>
+
+    <!-- Left: device list -->
+    <g class="pop-in">
+      <rect x="40" y="80" width="240" height="490" rx="12" fill="#11172e" stroke="#1e293b"/>
+      <text x="160" y="105" text-anchor="middle" fill="#94a3b8" font-size="11" letter-spacing="2">DEVICES</text>
+      <rect x="50" y="120" width="220" height="28" rx="6" fill="#0b1020" stroke="#1e293b"/>
+      <text x="60" y="138" fill="#64748b" font-size="11">🔍 search…</text>
+      ${listItem(50, 160, 'hq-firewall',  '10.0.0.1',  '#ef4444', true)}
+      ${listItem(50, 200, 'core-switch',  '10.0.0.2',  '#06b6d4')}
+      ${listItem(50, 240, 'edge-sw-A',    '10.0.0.3',  '#06b6d4')}
+      ${listItem(50, 280, 'edge-sw-B',    '10.0.0.4',  '#06b6d4')}
+      ${listItem(50, 320, 'server-1',     '10.10.5.10', '#22c55e')}
+      ${listItem(50, 360, 'PC-1',         '192.168.10.5', '#a78bfa')}
+    </g>
+
+    <!-- Middle: graph -->
+    <g class="pop-in delay-1">
+      <rect x="300" y="80" width="560" height="490" rx="12" fill="#11172e" stroke="#1e293b"/>
+      <text x="580" y="105" text-anchor="middle" fill="#94a3b8" font-size="11" letter-spacing="2">CYTOSCAPE · FCOSE LAYOUT</text>
+
+      ${graphNode(580, 200, 'firewall',  '#ef4444', 'selected')}
+      ${graphNode(420, 320, 'router',    '#60a5fa')}
+      ${graphNode(580, 320, 'switch',    '#06b6d4')}
+      ${graphNode(740, 320, 'switch',    '#06b6d4')}
+      ${graphNode(400, 450, 'server',    '#22c55e')}
+      ${graphNode(560, 470, 'workstation','#a78bfa')}
+      ${graphNode(720, 470, 'workstation','#a78bfa')}
+      ${graphNode(820, 230, 'router',    '#60a5fa')}
+
+      <!-- edges -->
+      <line x1="580" y1="200" x2="420" y2="320" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="580" y1="200" x2="580" y2="320" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="580" y1="200" x2="740" y2="320" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="580" y1="200" x2="820" y2="230" stroke="#22c55e" stroke-width="3" stroke-dasharray="4 4"/>
+      <line x1="420" y1="320" x2="400" y2="450" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="580" y1="320" x2="560" y2="470" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="740" y1="320" x2="720" y2="470" stroke="#06b6d4" stroke-width="2" stroke-dasharray="6 3"/>
+
+      <!-- Legend -->
+      <text x="320" y="555" fill="#94a3b8" font-size="11">LLDP solid · CDP dashed · L3 dotted · IPsec heavy dashed</text>
+    </g>
+
+    <!-- Right: detail panel -->
+    <g class="pop-in delay-2">
+      <rect x="880" y="80" width="280" height="490" rx="12" fill="#11172e" stroke="#1e293b"/>
+      <text x="1020" y="105" text-anchor="middle" fill="#94a3b8" font-size="11" letter-spacing="2">DEVICE DETAIL</text>
+      ${panelKV(895, 140, 'name',          'hq-firewall')}
+      ${panelKV(895, 175, 'kind',          'firewall')}
+      ${panelKV(895, 210, 'vendor',        'fortinet')}
+      ${panelKV(895, 245, 'mgmt IP',       '10.0.0.1')}
+      ${panelKV(895, 280, 'availability',  'up', '#22c55e')}
+      <text x="895" y="325" fill="#94a3b8" font-size="11" letter-spacing="2">INTERFACES</text>
+      <text x="895" y="350" fill="#e6ecff" font-size="12">• port1 — 1 Gbps</text>
+      <text x="895" y="370" fill="#e6ecff" font-size="12">• port2 — 10 Gbps</text>
+      <text x="895" y="400" fill="#94a3b8" font-size="11" letter-spacing="2">OPEN PORTS</text>
+      <text x="895" y="425" fill="#e6ecff" font-size="12">• 22 ssh</text>
+      <text x="895" y="445" fill="#e6ecff" font-size="12">• 443 tls (CN: hq-fw.corp)</text>
+      <text x="895" y="475" fill="#94a3b8" font-size="11" letter-spacing="2">EVENTS</text>
+      <text x="895" y="500" fill="#22c55e" font-size="11">+ device_added</text>
+      <text x="895" y="520" fill="#22c55e" font-size="11">+ new_neighbor_edge</text>
+    </g>
+  </svg>`;
+}
+
+function liveDemoArt() {
+  // Render the enterprise topology layout
+  const nodes = [
+    {x: 120, y: 110, c: '#60a5fa', l: 'ISP1'},
+    {x: 1080, y: 110, c: '#60a5fa', l: 'ISP2'},
+    {x: 280, y: 220, c: '#ef4444', l: 'ASA-8456'},
+    {x: 920, y: 220, c: '#ef4444', l: 'ASA-8456-S'},
+    {x: 600, y: 220, c: '#ef4444', l: 'ASAv-DMZ'},
+    {x: 600, y: 310, c: '#22c55e', l: 'Serv-DMZ'},
+    {x: 280, y: 320, c: '#60a5fa', l: 'vIOS-Ser-1'},
+    {x: 920, y: 320, c: '#60a5fa', l: 'vIOS-Ser-2'},
+    {x: 200, y: 410, c: '#22c55e', l: 'Server-1'},
+    {x: 380, y: 410, c: '#06b6d4', l: 'vIOS-Core-I'},
+    {x: 820, y: 410, c: '#06b6d4', l: 'vIOS-Core-II'},
+    {x: 380, y: 490, c: '#06b6d4', l: 'vIOS-Dis-I'},
+    {x: 820, y: 490, c: '#06b6d4', l: 'vIOS-Dis-II'},
+    {x: 280, y: 555, c: '#06b6d4', l: 'Acc-1'},
+    {x: 920, y: 555, c: '#06b6d4', l: 'Acc-2'},
+    {x: 200, y: 580, c: '#a78bfa', l: 'PC1'},
+    {x: 350, y: 580, c: '#a78bfa', l: 'PC2'},
+    {x: 850, y: 580, c: '#a78bfa', l: 'PC3'},
+    {x: 1000, y: 580, c: '#a78bfa', l: 'PC4'},
+  ];
+  const edges = [
+    [0,2],[1,3],[2,3],[2,6],[3,7],[2,4],[4,5],[6,7],[6,8],[6,9],[7,10],[9,10],
+    [9,11],[9,12],[10,11],[10,12],[11,12],[11,13],[11,14],[12,13],[12,14],
+    [13,15],[13,16],[14,17],[14,18]
+  ];
+  let s = `<svg viewBox="0 0 1200 620"><defs>${arrowDef()}</defs>`;
+  s += `<text x="600" y="40" text-anchor="middle" class="title-sub" style="font-size:18px">Demo seed — 19 devices, 24 LLDP edges</text>`;
+  s += `<text x="600" y="62" text-anchor="middle" fill="#94a3b8" font-size="12">click "Seed demo data" → fusion → graph in &lt;1s</text>`;
+  for (const e of edges) {
+    const a = nodes[e[0]], b = nodes[e[1]];
+    s += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#475569" stroke-width="1.4" class="pop-in delay-${Math.min(9, Math.floor(e[1]/3))}"/>`;
+  }
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    s += `<g class="pop-in delay-${Math.min(9, Math.floor(i/3))}">`;
+    s += `<circle cx="${n.x}" cy="${n.y}" r="12" fill="${n.c}" stroke="#0b1020" stroke-width="2"/>`;
+    s += `<text x="${n.x}" y="${n.y - 18}" text-anchor="middle" class="node-label">${n.l}</text>`;
+    s += `</g>`;
+  }
+  s += `</svg>`;
+  return s;
+}
+
+function crossCuttingArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>${arrowDef()}</defs>
+    <text x="600" y="50" text-anchor="middle" class="title-sub" style="font-size:18px">Cross-cutting concerns</text>
+
+    <!-- Binary patcher -->
+    <g class="pop-in">
+      <rect x="80" y="120" width="380" height="380" rx="12" fill="#11172e" stroke="#60a5fa" stroke-width="2"/>
+      <text x="270" y="150" text-anchor="middle" fill="#60a5fa" font-size="14" letter-spacing="2">BINARY PATCHER</text>
+      <text x="270" y="180" text-anchor="middle" fill="#94a3b8" font-size="12">Five placeholders baked in at install</text>
+
+      ${placeholder(100, 210, 'TENANT_ID',     '5fa9-4d3e-…')}
+      ${placeholder(100, 260, 'SERVER_URL',    'https://itom.example.com')}
+      ${placeholder(100, 310, 'COLLECTOR_ID',  '01J8Q…')}
+      ${placeholder(100, 360, 'AUTH_TOKEN',    'b6f2a8…')}
+      ${placeholder(100, 410, 'CIDR_PUBKEY',   'ed25519 base64…')}
+      <text x="270" y="470" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="600">itom-collector-{os}-{arch}.exe</text>
+    </g>
+
+    <!-- OS support -->
+    <g class="pop-in delay-2">
+      <rect x="500" y="120" width="620" height="380" rx="12" fill="#11172e" stroke="#22c55e" stroke-width="2"/>
+      <text x="810" y="150" text-anchor="middle" fill="#22c55e" font-size="14" letter-spacing="2">ONE BINARY, EVERY OS</text>
+      <text x="810" y="200" text-anchor="middle" fill="#e6ecff" font-size="42">🐧</text>
+      <text x="810" y="230" text-anchor="middle" fill="#e6ecff" font-size="13">Linux</text>
+      <text x="640" y="200" text-anchor="middle" fill="#e6ecff" font-size="42">🍎</text>
+      <text x="640" y="230" text-anchor="middle" fill="#e6ecff" font-size="13">macOS</text>
+      <text x="980" y="200" text-anchor="middle" fill="#e6ecff" font-size="42">🪟</text>
+      <text x="980" y="230" text-anchor="middle" fill="#e6ecff" font-size="13">Windows</text>
+
+      <text x="810" y="295" text-anchor="middle" fill="#94a3b8" font-size="12">no admin · no Npcap · no raw sockets</text>
+
+      <line x1="540" y1="330" x2="1080" y2="330" stroke="#1e293b"/>
+      <text x="810" y="365" text-anchor="middle" fill="#60a5fa" font-size="12" letter-spacing="2">DEFENCE IN DEPTH</text>
+      <text x="810" y="395" text-anchor="middle" fill="#e6ecff" font-size="13">• Ed25519-signed CIDR allowlist verified per packet</text>
+      <text x="810" y="420" text-anchor="middle" fill="#e6ecff" font-size="13">• Tenant credentials fetched JIT, audited every decrypt</text>
+      <text x="810" y="445" text-anchor="middle" fill="#e6ecff" font-size="13">• Per-host timeout, per-device rate limit, blacklist</text>
+      <text x="810" y="470" text-anchor="middle" fill="#e6ecff" font-size="13">• Row-level security on every tenant query</text>
+    </g>
+  </svg>`;
+}
+
+function roadmapArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <text x="600" y="50" text-anchor="middle" class="title-sub" style="font-size:18px">What's still to come</text>
+
+    <!-- horizontal timeline -->
+    <line x1="100" y1="300" x2="1100" y2="300" stroke="#1e293b" stroke-width="2"/>
+
+    ${milestone(150, 'ch 0',  'Foundation',     '#22c55e', true)}
+    ${milestone(280, 'ch 1',  'Firewall',       '#22c55e', true)}
+    ${milestone(410, 'ch 2',  'SNMP',           '#22c55e', true)}
+    ${milestone(540, 'ch 3',  'Active scan',    '#22c55e', true)}
+    ${milestone(670, 'ch 4',  'Topology UI',    '#22c55e', true)}
+    ${milestone(800, 'ch 5',  'Snapshots',      '#f59e0b')}
+    ${milestone(930, 'ch 6',  'Alerting',       '#94a3b8')}
+    ${milestone(1060, 'next', 'VRRP / VPN',     '#94a3b8')}
+
+    <text x="600" y="500" text-anchor="middle" fill="#94a3b8" font-size="13">Snapshots · time-slider · VRRP/HSRP pairs · port-channel aggregation · Cisco ASA NAT/VPN · alerting</text>
+  </svg>`;
+}
+
+function outroArt() {
+  return `
+  <svg viewBox="0 0 1200 600">
+    <defs>
+      <radialGradient id="outroglow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#22c55e" stop-opacity="0.45"/>
+        <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="600" cy="300" r="260" fill="url(#outroglow)" class="pulse"/>
+    <text class="title-big" x="600" y="300" text-anchor="middle" fill="#22c55e">✓ Shipped</text>
+    <text class="title-sub" x="600" y="360" text-anchor="middle">Chapters 0 — 4 complete</text>
+    <text class="title-sub" x="600" y="395" text-anchor="middle" style="font-size:14px">Foundation · Firewall · SNMP · Active scan · Fusion · Topology UI</text>
+  </svg>`;
+}
+
+// ====================================================================
+// SVG primitives
+// ====================================================================
+function arrowDef() {
+  return `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa"/>
+  </marker>`;
+}
+
+function deviceIcon(cx, cy, kind, label, color, w = 48, h = 48) {
+  const symbols = {
+    firewall:    '🛡',
+    router:      '⟳',
+    switch:      '⬚',
+    server:      '🗄',
+    workstation: '🖥',
+    printer:     '🖨',
+    iot:         '◉',
+  };
+  return `
+    <g class="pop-in">
+      <rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" rx="8" fill="#0b1020" stroke="${color}" stroke-width="2"/>
+      <text x="${cx}" y="${cy + 8}" text-anchor="middle" font-size="22" fill="${color}">${symbols[kind] || '•'}</text>
+      <text x="${cx}" y="${cy + h/2 + 18}" text-anchor="middle" class="node-label">${label}</text>
+    </g>`;
+}
+
+function dataArrow(x1, y1, x2, y2, label, idx) {
+  return `
+    <g class="pop-in delay-${idx % 6}">
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="flow-arrow"/>
+      <text x="${(x1+x2)/2}" y="${(y1+y2)/2 - 8}" text-anchor="middle" fill="#60a5fa" font-size="11">${label}</text>
+    </g>`;
+}
+
+function tableBox(x, y, name, cols) {
+  let s = `<rect x="${x}" y="${y}" width="200" height="180" rx="8" fill="#0b1020" stroke="#1e293b"/>`;
+  s += `<rect x="${x}" y="${y}" width="200" height="32" rx="8" fill="#1e293b"/>`;
+  s += `<text x="${x+10}" y="${y+22}" fill="#60a5fa" font-size="13" font-weight="600">${name}</text>`;
+  cols.forEach((c, i) => {
+    s += `<text x="${x+12}" y="${y+58 + i*22}" fill="#94a3b8" font-size="11">${c}</text>`;
+  });
+  return s;
+}
+
+function walkerBox(x, y, label, idx) {
+  return `
+    <g class="pop-in delay-${idx % 9}">
+      <rect x="${x}" y="${y}" width="110" height="44" rx="6" fill="#0b1020" stroke="#06b6d4"/>
+      <text x="${x + 55}" y="${y + 28}" text-anchor="middle" fill="#06b6d4" font-size="12">${label}</text>
+    </g>`;
+}
+
+function walkerLine(x1, y1, x2, y2) {
+  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1e293b" stroke-width="1" stroke-dasharray="3 3"/>`;
+}
+
+function stageBox(x, y, num, label, color, idx) {
+  return `
+    <g class="pop-in delay-${idx}">
+      <rect x="${x}" y="${y}" width="280" height="70" rx="8" fill="#0b1020" stroke="${color}" stroke-width="2"/>
+      <circle cx="${x+30}" cy="${y+35}" r="20" fill="${color}"/>
+      <text x="${x+30}" y="${y+42}" text-anchor="middle" fill="#0b1020" font-size="20" font-weight="700">${num}</text>
+      <text x="${x+70}" y="${y+42}" fill="#e6ecff" font-size="14">${label}</text>
+    </g>`;
+}
+
+function observation(x, y, label, color, idx) {
+  return `
+    <g class="pop-in delay-${idx % 9}">
+      <circle cx="${x}" cy="${y}" r="10" fill="${color}"/>
+      <text x="${x + 18}" y="${y + 5}" fill="#94a3b8" font-size="11">${label}</text>
+    </g>`;
+}
+
+function typedBox(x, y, name, idx) {
+  return `
+    <g class="pop-in delay-${idx % 9}">
+      <rect x="${x}" y="${y}" width="220" height="46" rx="8" fill="#0b1020" stroke="#22c55e"/>
+      <text x="${x + 110}" y="${y + 28}" text-anchor="middle" fill="#22c55e" font-size="13" font-family="monospace">${name}</text>
+    </g>`;
+}
+
+function listItem(x, y, name, ip, color, selected) {
+  return `
+    <g>
+      <rect x="${x}" y="${y}" width="220" height="36" rx="6" fill="${selected ? '#1e293b' : 'transparent'}" stroke="${selected ? color : 'transparent'}"/>
+      <circle cx="${x+12}" cy="${y+18}" r="5" fill="${color}"/>
+      <text x="${x+26}" y="${y+16}" fill="#e6ecff" font-size="12" font-weight="600">${name}</text>
+      <text x="${x+26}" y="${y+30}" fill="#64748b" font-size="11">${ip}</text>
+    </g>`;
+}
+
+function graphNode(cx, cy, kind, color, state) {
+  const selected = state === 'selected';
+  return `
+    <g>
+      <circle cx="${cx}" cy="${cy}" r="${selected ? 22 : 16}" fill="${color}" stroke="${selected ? '#3b82f6' : '#0b1020'}" stroke-width="${selected ? 4 : 2}"/>
+      ${selected ? `<circle cx="${cx}" cy="${cy}" r="32" fill="none" stroke="#3b82f6" stroke-width="1" opacity="0.4" class="pulse"/>` : ''}
+      <text x="${cx}" y="${cy + (selected ? 38 : 32)}" text-anchor="middle" fill="#e6ecff" font-size="10">${kind}</text>
+    </g>`;
+}
+
+function panelKV(x, y, k, v, valueColor) {
+  return `
+    <g>
+      <text x="${x}" y="${y}" fill="#94a3b8" font-size="11">${k}</text>
+      <text x="${x + 250}" y="${y}" text-anchor="end" fill="${valueColor || '#e6ecff'}" font-size="12">${v}</text>
+    </g>`;
+}
+
+function placeholder(x, y, key, val) {
+  return `
+    <g>
+      <rect x="${x}" y="${y}" width="340" height="32" rx="6" fill="#0b1020" stroke="#1e293b"/>
+      <text x="${x + 10}" y="${y + 20}" fill="#60a5fa" font-size="11" font-family="monospace">${key}</text>
+      <text x="${x + 330}" y="${y + 20}" text-anchor="end" fill="#94a3b8" font-size="11" font-family="monospace">${val}</text>
+    </g>`;
+}
+
+function milestone(x, tag, label, color, done) {
+  return `
+    <g class="pop-in">
+      <circle cx="${x}" cy="300" r="${done ? 18 : 12}" fill="${color}" stroke="#0b1020" stroke-width="3"/>
+      ${done ? `<text x="${x}" y="307" text-anchor="middle" fill="#0b1020" font-size="14" font-weight="700">✓</text>` : ''}
+      <text x="${x}" y="260" text-anchor="middle" fill="${color}" font-size="11" letter-spacing="2">${tag.toUpperCase()}</text>
+      <text x="${x}" y="350" text-anchor="middle" fill="#e6ecff" font-size="12">${label}</text>
+    </g>`;
+}
+
+// ====================================================================
+// Player
+// ====================================================================
+const stage = document.getElementById('stage');
+const splash = document.getElementById('splash');
+const startBtn = document.getElementById('start');
+const playPauseBtn = document.getElementById('playPause');
+const nextBtn = document.getElementById('next');
+const prevBtn = document.getElementById('prev');
+const restartBtn = document.getElementById('restart');
+const bar = document.getElementById('bar');
+const sceneLabel = document.getElementById('sceneLabel');
+const timeLabel = document.getElementById('timeLabel');
+const voiceSel = document.getElementById('voiceSel');
+
+let currentIdx = -1;
+let playing = false;
+let sceneStart = 0;
+let sceneTimer = null;
+let progressTimer = null;
+let chosenVoice = null;
+let currentUtterance = null;
+let narrationDone = false;
+
+const totalDuration = SCENES.reduce((a, s) => a + s.minSeconds, 0);
+
+function buildScenes() {
+  SCENES.forEach((sc, i) => {
+    const div = document.createElement('div');
+    div.className = 'scene';
+    div.dataset.idx = String(i);
+    div.innerHTML = `
+      <div>
+        <span class="chapter-tag">${sc.tag}</span>
+        <h2>${sc.title}</h2>
+      </div>
+      <div class="stage-art">${sc.art}</div>
+      <div class="caption-area">${sc.narration}</div>
+    `;
+    stage.appendChild(div);
+  });
+}
+
+function populateVoices() {
+  const voices = speechSynthesis.getVoices();
+  voiceSel.innerHTML = '';
+  // Prefer English neural voices
+  const en = voices.filter((v) => /^en[-_]/i.test(v.lang));
+  const ordered = [
+    ...en.filter((v) => /neural|natural|aria|jenny|guy|sonia|libby/i.test(v.name)),
+    ...en.filter((v) => !/neural|natural|aria|jenny|guy|sonia|libby/i.test(v.name)),
+  ];
+  if (ordered.length === 0) ordered.push(...voices);
+  ordered.forEach((v) => {
+    const opt = document.createElement('option');
+    opt.value = v.name;
+    opt.textContent = `${v.name} — ${v.lang}`;
+    voiceSel.appendChild(opt);
+  });
+  // Pick a preferred default
+  const preferred = ordered.find((v) => /aria|jenny|sonia|libby|samantha/i.test(v.name)) || ordered[0];
+  if (preferred) {
+    chosenVoice = preferred;
+    voiceSel.value = preferred.name;
+  }
+}
+
+voiceSel.addEventListener('change', () => {
+  const all = speechSynthesis.getVoices();
+  chosenVoice = all.find((v) => v.name === voiceSel.value) || null;
+});
+
+function speak(text) {
+  return new Promise((resolve) => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if (chosenVoice) u.voice = chosenVoice;
+    u.rate = 0.98;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    u.onend = () => resolve();
+    u.onerror = () => resolve();
+    currentUtterance = u;
+    speechSynthesis.speak(u);
+  });
+}
+
+function showScene(idx) {
+  document.querySelectorAll('.scene').forEach((el) => {
+    el.classList.toggle('active', Number(el.dataset.idx) === idx);
+  });
+  sceneLabel.textContent = `Scene ${idx + 1} of ${SCENES.length} · ${SCENES[idx].tag}`;
+}
+
+function elapsedSeconds() {
+  let s = 0;
+  for (let i = 0; i < currentIdx; i++) s += SCENES[i].minSeconds;
+  if (sceneStart) s += (performance.now() - sceneStart) / 1000;
+  return s;
+}
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  const ss = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${ss}`;
+}
+
+function updateProgress() {
+  const e = elapsedSeconds();
+  const pct = Math.min(100, (e / totalDuration) * 100);
+  bar.style.width = pct + '%';
+  timeLabel.textContent = `${fmtTime(e)} / ${fmtTime(totalDuration)}`;
+}
+
+async function playScene(idx) {
+  currentIdx = idx;
+  showScene(idx);
+  sceneStart = performance.now();
+  narrationDone = false;
+  const sc = SCENES[idx];
+
+  const narrationPromise = speak(sc.narration).then(() => {
+    narrationDone = true;
+  });
+  const minDelay = new Promise((r) => setTimeout(r, sc.minSeconds * 1000));
+
+  await Promise.all([narrationPromise, minDelay]);
+
+  if (playing) {
+    if (idx + 1 < SCENES.length) {
+      playScene(idx + 1);
+    } else {
+      // End reached
+      playing = false;
+      playPauseBtn.textContent = '▶';
+    }
+  }
+}
+
+function start() {
+  splash.style.display = 'none';
+  playing = true;
+  playPauseBtn.textContent = '⏸';
+  if (currentIdx < 0) {
+    playScene(0);
+  } else {
+    playScene(currentIdx);
+  }
+  if (!progressTimer) {
+    progressTimer = setInterval(updateProgress, 250);
+  }
+}
+
+function pause() {
+  playing = false;
+  playPauseBtn.textContent = '▶';
+  speechSynthesis.cancel();
+}
+
+function resume() {
+  if (currentIdx < 0) currentIdx = 0;
+  playing = true;
+  playPauseBtn.textContent = '⏸';
+  playScene(currentIdx);
+}
+
+function next() {
+  speechSynthesis.cancel();
+  if (currentIdx + 1 < SCENES.length) {
+    playScene(currentIdx + 1);
+  }
+}
+
+function prev() {
+  speechSynthesis.cancel();
+  if (currentIdx > 0) {
+    playScene(currentIdx - 1);
+  } else {
+    playScene(0);
+  }
+}
+
+function restart() {
+  speechSynthesis.cancel();
+  currentIdx = -1;
+  bar.style.width = '0%';
+  playing = true;
+  playPauseBtn.textContent = '⏸';
+  playScene(0);
+}
+
+startBtn.addEventListener('click', start);
+playPauseBtn.addEventListener('click', () => playing ? pause() : resume());
+nextBtn.addEventListener('click', next);
+prevBtn.addEventListener('click', prev);
+restartBtn.addEventListener('click', restart);
+
+// Spacebar shortcut
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    playing ? pause() : (currentIdx < 0 ? start() : resume());
+  }
+  if (e.code === 'ArrowRight') next();
+  if (e.code === 'ArrowLeft') prev();
+});
+
+// Build scenes immediately so layout is ready
+buildScenes();
+
+// Voices load asynchronously in most browsers
+if (speechSynthesis.getVoices().length > 0) {
+  populateVoices();
+} else {
+  speechSynthesis.addEventListener('voiceschanged', populateVoices);
+}
+</script>
+</body>
+</html>

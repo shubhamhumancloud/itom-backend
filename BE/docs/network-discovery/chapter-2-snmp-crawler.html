@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 2 — SNMP Crawler</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 2</div>
+<h1>The SNMP Crawler</h1>
+<p class="subtitle">Walking the hallways, knocking on every room</p>
+
+<h2>What this chapter is about</h2>
+<p>The firewall told us which subnets exist and how to reach them. Now we walk into the building — into the switches and routers themselves — and ask each one three questions: <em>"who are you?"</em>, <em>"who are your neighbours?"</em>, and <em>"who's plugged into your ports right now?"</em>. We do this recursively, neighbour to neighbour, until we've mapped the whole network. The output is a <b>topology graph</b>: every switch, every uplink between switches, every host with the exact port it's plugged into.</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> Imagine you've just been handed a list of floors in a 30-storey building. Now you take a clipboard and walk into floor 3. There's a panel on the wall called the wiring closet. You read it: "I am Switch-3A, my neighbour through cable 7 is Switch-3B, my neighbour through cable 12 is Switch-2-Core." You write that down. Then you walk to Switch-3B. You read its panel. It points to Switch-3A (you've been there) and to Switch-3C (new — go there next). You also peek at the desk-occupancy log on each switch ("desk #14 is currently used by Mr. Patel's laptop") and you write that down too. By the time you finish, you have the full wiring diagram of the building plus a list of who is sitting at which desk. The clipboard-and-walking is the SNMP Crawler.
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>SNMP (Simple Network Management Protocol).</b> A very old, very widely supported protocol that lets you read structured information out of a network device. Think of it as "the device exposes a giant tree of facts; you can read any branch of the tree." Versions in the wild: SNMPv1 (avoid — plaintext, no auth), SNMPv2c (still common — uses a "community string" as a shared password), SNMPv3 (modern — username + authentication + encryption).</div>
+
+<div class="term"><b>Community string.</b> The "password" for SNMPv2c. Conventionally <code>public</code> for read-only. Every customer should have changed this; many haven't.</div>
+
+<div class="term"><b>OID (Object IDentifier).</b> A long dotted number that names one branch of the SNMP tree, like <code>1.3.6.1.2.1.2.2.1.2</code>. Each OID has a human-readable name in a "MIB" (see below).</div>
+
+<div class="term"><b>MIB (Management Information Base).</b> A documentation file that tells you "this OID is called <code>ifDescr</code> and it holds the human-readable name of an interface, like Gi1/0/1." MIBs are like the Yellow Pages for OIDs.</div>
+
+<div class="term"><b>SNMP walk.</b> "Give me everything under this branch of the tree." If the branch is "interface table", you get back one row per interface on the device.</div>
+
+<div class="term"><b>GETBULK.</b> A bulk-read operation in SNMPv2c+. We tell the device "give me 50 OIDs at a time" instead of 1, which makes walks 10–50× faster.</div>
+
+<div class="term"><b>LLDP (Link Layer Discovery Protocol).</b> An IEEE standard. Every modern switch shouts "I am Switch-A on port Gi1/0/3" out of every port every 30 seconds. Its neighbour hears this and stores it in a table. We read that table to learn the wiring. Vendor-neutral.</div>
+
+<div class="term"><b>CDP (Cisco Discovery Protocol).</b> Same idea as LLDP, but Cisco-only and older. Many Cisco shops disable LLDP for "security" and rely on CDP. So we always read both.</div>
+
+<div class="term"><b>Layer 2 (L2) and Layer 3 (L3).</b> Layer 2 = ethernet — switches forwarding frames using MAC addresses. Layer 3 = IP — routers forwarding packets using IP addresses. A switch is L2; a router is L3; an "L3 switch" does both.</div>
+
+<div class="term"><b>VLAN (Virtual LAN).</b> A way to slice one physical switch into many isolated logical networks. Cable-wise the ports are all on one box; logically the "Sales VLAN" and the "HR VLAN" can't talk to each other without going through a router.</div>
+
+<div class="term"><b>Routing table / RIB (Routing Information Base).</b> Same idea as on the firewall — "to reach this network, send packets to that next-hop." On routers we read it to learn what other networks exist beyond what the firewall already told us.</div>
+
+<div class="term"><b>ARP table / IP-to-MAC binding.</b> "I just spoke to IP 10.0.5.42 and its MAC is aa:bb:cc:..." On switches and routers, walking this gives us a list of currently-active hosts. The modern OID branch is called <code>ipNetToPhysicalTable</code>; older devices only populate the legacy <code>ipNetToMediaTable</code>, so we walk both.</div>
+
+<div class="term"><b>MAC table / FDB (Forwarding DataBase) / CAM (Content-Addressable Memory) table.</b> Same thing, three names. The switch's record of "MAC aa:bb:cc:... was last seen on port Gi1/0/14." Joining the FDB (MAC→port) with the ARP table (IP→MAC) lets us say "host 10.0.5.42 is plugged into port 14 of switch-3B." That join is the Holy Grail of host placement.</div>
+
+<div class="term"><b>BFS (Breadth-First Search).</b> The simplest graph-walking algorithm: "look at all my neighbours first, then their neighbours, then theirs." Compare to depth-first ("go deep down one path before backing up"). BFS is the right algorithm for topology because it discovers the whole "first ring" of switches before going further out.</div>
+
+<div class="term"><b>Chassis ID.</b> A unique serial number that identifies one physical box. We use it as a deduplication key — if a switch has 3 management IPs, we don't want to walk it 3 times. Chassis ID says "you've already met this box."</div>
+
+<h2>What we're building (the picture)</h2>
+
+<pre>
+                       ┌──────────────────────┐
+                       │  Perimeter firewall  │
+                       │  (already ingested)  │
+                       └──────────┬───────────┘
+                                  │
+                ┌─────────────────┼──────────────────┐
+                │ next-hop IP     │ next-hop IP      │ ← seeds for the crawler
+                ▼                 ▼                  ▼
+         ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+         │  Core L3 sw  │  │  Branch rtr  │  │ DC core rtr  │
+         └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+                │                 │                 │
+                ▼  LLDP+CDP says: │                 │
+         ┌──────────────┐    "we're cabled to ..."  │
+         │  Access sw   │ ◄────────┐                │
+         └──────┬───────┘          │                │
+            FDB+ARP says:          │                │
+        "MAC X is on port 14   ┌───┴────────────┐   │
+        and X has IP 10.0.5.42"│ Crawler does   │   │
+                               │ BFS recursion  │   │
+                               │ via LLDP/CDP   │   │
+                               └────────────────┘   │
+                                                    ▼
+                                            (and so on)
+</pre>
+
+<p>The output we hand to Chapter 4 is a graph: <b>nodes</b> are devices, <b>edges</b> are LLDP/CDP cables between switches plus ARP/FDB joins for host placement.</p>
+
+<h2>What we read on each device, and why</h2>
+
+<table>
+<tr><th>MIB table (with OID)</th><th>What it gives us</th></tr>
+<tr><td><b>System group</b> — <code>sysDescr.0</code>, <code>sysObjectID.0</code>, <code>sysName.0</code> (1.3.6.1.2.1.1)</td><td>"I am a Cisco Catalyst 9300, software 17.6, hostname swA-floor3." Always read first.</td></tr>
+<tr><td><b>IF-MIB::ifTable + ifXTable</b> (1.3.6.1.2.1.2.2 and .31.1.1)</td><td>List of every interface: name, type, speed, up/down, MAC. Use <code>ifHighSpeed</code> for accurate speeds (the older <code>ifSpeed</code> wraps at 4 Gbps).</td></tr>
+<tr><td><b>LLDP-MIB::lldpRemTable</b> (1.0.8802.1.1.2.1.4.1.1)</td><td>"On my port 5 my neighbour is sysName=swB, port=Gi1/0/3, mgmt-IP=10.0.0.2." This is what drives recursion.</td></tr>
+<tr><td><b>CISCO-CDP-MIB::cdpCacheTable</b> (1.3.6.1.4.1.9.9.23.1.2.1.1)</td><td>Same as LLDP, Cisco flavour. Walk in parallel — many shops have one or the other disabled.</td></tr>
+<tr><td><b>IP-MIB::ipNetToPhysicalTable</b> (1.3.6.1.2.1.4.35), fallback <code>ipNetToMediaTable</code> (.4.22)</td><td>ARP table: which IP is currently bound to which MAC.</td></tr>
+<tr><td><b>BRIDGE-MIB::dot1dTpFdbTable</b> (1.3.6.1.2.1.17.4.3) or <b>Q-BRIDGE-MIB::dot1qTpFdbTable</b></td><td>Switch's MAC-to-port table. Joined with ARP, gives us host placement.</td></tr>
+<tr><td><b>IP-FORWARD-MIB::inetCidrRouteTable</b> (1.3.6.1.2.1.4.24.7), fallback <code>ipCidrRouteTable</code> (.24.4)</td><td>Routing table on L3 devices.</td></tr>
+<tr><td><b>IP-MIB::ipAddressTable</b> (1.3.6.1.2.1.4.34)</td><td>Which IPs are configured on which interfaces. Two routers on the same /30 subnet → L3 adjacency edge.</td></tr>
+<tr><td><b>ENTITY-MIB::entPhysicalTable</b> (1.3.6.1.2.1.47.1.1.1.1)</td><td>Chassis serial number, model, modules. Use the chassis-class entry's <code>entPhysicalSerialNum</code> as your dedup key.</td></tr>
+</table>
+
+<h2>The recursion algorithm in plain English</h2>
+
+<p>This is the heart of the crawler. We use <b>BFS</b>:</p>
+
+<pre>
+queue   = [ seeds from firewall RIB ]    # IPs of next-hop routers
+visited = { }                            # set of chassis IDs we've already crawled
+
+while queue is not empty:
+    target = queue.pop_front()
+
+    # Step 1: do we have credentials that match this IP/range?
+    creds = credentialStore.match(target.ip, tenant)
+    if creds is None:
+        graph.markUnreached(target, reason = "no credentials")
+        continue
+
+    # Step 2: try to talk SNMP
+    conn, err = snmp.dial(target.ip, creds, timeout=2s, retries=2)
+    if err:
+        graph.markUnreached(target, reason = err)
+        continue
+
+    # Step 3: figure out who this device IS — chassis ID for dedup
+    chassisID = walk(entPhysicalSerialNum, class=chassis)
+                or walk(lldpLocChassisId)
+    if chassisID in visited:
+        graph.aliasIP(target.ip, chassisID)   # different IP, same box
+        continue
+    visited.add(chassisID)
+
+    # Step 4: read the device
+    device = collect(sysInfo, ifTable + ifXTable, ipAddressTable)
+    graph.addNode(device)
+
+    # Step 5: find neighbours
+    neighbours = walk(lldpRemTable) + walk(cdpCacheTable)
+    for n in neighbours:
+        graph.addEdge(device.localPort, n)
+        if n.chassisId not in visited and n.chassisId not in queue:
+            queue.push({chassisID: n.chassisId, candidateIPs: n.mgmtAddrs})
+
+    # Step 6: enrich (does NOT drive further recursion)
+    fdb    = walkFDB(device, perVLAN = isCisco(device))
+    arp    = walk(ipNetToPhysical) or walk(ipNetToMedia)
+    routes = walk(inetCidrRoute) or walk(ipCidrRoute)
+    graph.attachHosts( join(fdb, arp) )
+</pre>
+
+<p>Two crucial design choices:</p>
+<ol>
+<li><b>Dedup by chassis ID, not by IP.</b> Routers often have many management IPs (HSRP/VRRP virtual IPs, multiple loopbacks, stacked switches sharing one chassis). If you dedup by IP you'll walk the same box six times.</li>
+<li><b>Cap the BFS.</b> A misconfigured network can return millions of fake neighbours. Cap depth (e.g. 8 hops) and total node count per tenant (e.g. 10,000 devices) as a circuit breaker.</li>
+</ol>
+
+<h2>The Cisco VLAN-context trick (don't skip this)</h2>
+
+<p>On Cisco IOS / IOS-XE switches, the <b>FDB / MAC-table walk</b> is broken in a famous way: a plain SNMPv2c walk only returns MACs from the <em>native VLAN</em>. To see MACs in VLAN 10, you must connect with community string <code>public@10</code>. To see VLAN 20, use <code>public@20</code>. And so on.</p>
+
+<p>SNMPv3 has a clean equivalent: set the <code>contextName</code> field to <code>vlan-10</code>.</p>
+
+<p>So the algorithm becomes:</p>
+<ol>
+<li>Walk <code>vtpVlanState</code> (or just <code>1.3.6.1.2.1.17.7.1.4.3.1.4</code>) to enumerate the active VLANs.</li>
+<li>For each VLAN, re-connect with the appropriate context and walk the FDB.</li>
+<li>Union all results.</li>
+</ol>
+
+<p>NX-OS and most non-Cisco vendors don't need this; they expose VLAN-aware data through Q-BRIDGE-MIB directly.</p>
+
+<h2>Performance and politeness</h2>
+
+<p>Real-world numbers on a 48-port access switch with 50 ms RTT:</p>
+<ul>
+<li>System group + ifTable + ifXTable walk: 0.5 to 1.5 seconds.</li>
+<li>FDB walk for one VLAN: 0.5 to 2 seconds. With 50 VLANs sequentially: 30–90 seconds. <em>This dominates total walk time on Cisco.</em></li>
+<li>LLDP + CDP walk: under a second combined.</li>
+<li>Routing table on a core router with 50,000 routes: 20–60 seconds. Diff-walk if you can.</li>
+</ul>
+
+<p>Politeness rules:</p>
+<ol>
+<li><b>One SNMP session per device, walks done sequentially.</b> Many low-end switches drop packets above one outstanding request and have CPU-throttled SNMP that caps at ~50 packets/sec. A misbehaving collector can spike a switch's CPU and page the customer's network team at 3am.</li>
+<li><b>Across devices, parallel.</b> A worker pool of ~32 max, scaled per tenant.</li>
+<li><b>Stagger walk start times.</b> Don't fire the entire fleet at <code>:00</code> on the hour.</li>
+<li><b>Backoff.</b> Exponential on timeout; blacklist after 3 consecutive failures within a poll cycle.</li>
+<li><b>Distinguish failures.</b> "Auth failed" (bad community/v3 creds) is different from "unreachable" (no UDP response). Operators need to see which.</li>
+</ol>
+
+<h2>How we test Chapter 2</h2>
+
+<div class="box">
+<b>Lab setup.</b> Build a small known topology in EVE-NG or GNS3 (free emulator):
+<pre>
+   coreR  ─── distSw ─── accessSw1 ─── pcA, printerB
+                       └─ accessSw2 ─── pcC, vmHostD
+</pre>
+Configure SNMPv2c read-only with a known community on every device. Optionally enable SNMPv3 on one device to test the v3 path.
+</div>
+
+<div class="box">
+<b>Test 1 — Identity and interfaces.</b>
+<ol>
+<li>Run the crawler with <code>coreR</code> as the seed.</li>
+<li>Confirm every device's <code>sysName</code> appears in <code>device</code> table.</li>
+<li>Confirm interface counts match what you configured.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — Edges from LLDP/CDP.</b>
+<ol>
+<li>The graph must contain edges <code>coreR↔distSw</code>, <code>distSw↔accessSw1</code>, <code>distSw↔accessSw2</code>.</li>
+<li>Disable LLDP on one device, leave CDP on; rerun. Edges still appear.</li>
+<li>Disable both; that device is reachable but its neighbours edge from <em>only</em> the other side. Confirmed expected behaviour.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — Host placement.</b>
+<ol>
+<li>Confirm <code>pcA</code>'s IP is associated with <code>accessSw1</code> port X — joining FDB and ARP correctly.</li>
+<li>Confirm a host that has been silent for &gt; ARP-timeout no longer shows up (shows in observation history but not "current state").</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — VLAN context trick on Cisco.</b>
+<ol>
+<li>Configure VLAN 10 and VLAN 20 on accessSw1 with hosts in each.</li>
+<li>Without the trick, plain walk only sees VLAN 1's MACs. With the trick, see all.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 5 — Chassis-ID dedup.</b>
+<ol>
+<li>Configure two management IPs on coreR.</li>
+<li>Seed the crawler with both.</li>
+<li>Confirm only one <code>device</code> row exists, with both IPs aliased.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 6 — Politeness under load.</b>
+<ol>
+<li>Build a 100-device emulated lab.</li>
+<li>Run a full crawl. Monitor CPU on the smallest emulated switch.</li>
+<li>Confirm CPU stays under 50% during the walk.</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>LLDP disabled on user ports as a "security policy".</b> You will see uplinks but no edges to APs, IP phones, or end-host bridges. This is normal in security-conscious enterprises; don't try to "fix" it. Document the gap.</div>
+
+<div class="pitfall"><b>Stale ARP/FDB entries.</b> A host that pinged 4 hours ago still appears. Always store the <code>seen_at</code>; treat anything older than 1 ARP-aging-cycle (default 4 hours on most gear) as "last seen", not "currently here."</div>
+
+<div class="pitfall"><b>Phones daisy-chaining laptops.</b> An IP phone with a built-in switch shows up as one LLDP-MED neighbour, plus several MACs behind that single port via FDB. The laptop is one of those MACs, not a port-direct neighbour. Your fusion logic must understand "MAC behind port X" vs "device cabled to port X" are different.</div>
+
+<div class="pitfall"><b>Unmanaged switches.</b> A cheap unmanaged 8-port switch is invisible to SNMP. Its uplink port on the upstream device shows 8 MACs, all "behind that port." You can't distinguish which is plugged where. Document the gap; flag it as "MAC cloud".</div>
+
+<div class="pitfall"><b>Cisco SMB / MikroTik fragility.</b> These rate-limit SNMP harshly. Treat them with extra politeness: max 50 GETBULK/sec, 2-second inter-PDU delay if flagged "fragile."</div>
+
+<div class="pitfall"><b>SNMPv3 EngineID discovery latency.</b> The first packet to a v3 device costs an extra round-trip. Reuse the SNMP session struct across walks to one device, don't rebuild it per OID.</div>
+
+<div class="pitfall"><b>Wireless clients invisible from switch alone.</b> WiFi clients show up as a sea of MACs behind the AP's switch port. To tell them apart you need the wireless controller's MIB (CISCO-LWAPP-MIB, ARUBA-WLAN-MIB) — defer this to a future phase.</div>
+
+<h2>Exit checklist (you can move to Chapter 3 only when ALL are true)</h2>
+<ul>
+<li>☐ A 100-device emulated topology produces a graph that matches the cabling diagram.</li>
+<li>☐ LLDP-only and CDP-only and both-enabled cases all yield correct edges.</li>
+<li>☐ Cisco per-VLAN community trick is implemented and tested with at least 2 VLANs.</li>
+<li>☐ Chassis-ID dedup proven with a 2-mgmt-IP device.</li>
+<li>☐ Auth-failure and unreachable are distinguished in results and audit log.</li>
+<li>☐ A full crawl on the lab leaves all device CPUs under 50%.</li>
+<li>☐ ARP+FDB join correctly places at least 90% of test hosts onto the right port.</li>
+<li>☐ BFS depth and node-count caps are configurable and tested with a runaway scenario.</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 2 in 5 sentences</h3>
+<ol>
+<li>Seeded from the firewall's next-hop IPs, the crawler walks SNMP on every router/switch and recursively follows LLDP+CDP neighbour pointers.</li>
+<li>On every device read system info, interfaces (IF-MIB), neighbours (LLDP-MIB + CDP-MIB), ARP (IP-MIB), MAC table (Q-BRIDGE-MIB), and routes (IP-FORWARD-MIB).</li>
+<li>Use BFS, dedup by chassis serial (not IP), cap depth and node-count to prevent runaway walks.</li>
+<li>Cisco IOS needs the per-VLAN community trick (<code>community@vlan-id</code>) for FDB; without it you only see one VLAN of MACs.</li>
+<li>Be polite — sequential walks per device, parallel across devices, capped concurrency, exponential backoff, distinguish auth-failure from unreachable.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 2 of 6 — SNMP Crawler</div>
+
+</body>
+</html>

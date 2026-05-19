@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chapter 0 — Foundation</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; max-width: 820px; margin: 0 auto; }
+  h1, h2, h3, h4 { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0b3d6d; }
+  h1 { font-size: 30pt; margin: 0 0 8pt; border-bottom: 3px solid #0b3d6d; padding-bottom: 6pt; }
+  h2 { font-size: 18pt; margin-top: 28pt; border-bottom: 1px solid #c8d4e0; padding-bottom: 4pt; }
+  h3 { font-size: 14pt; margin-top: 18pt; color: #114b85; }
+  h4 { font-size: 12pt; margin-top: 12pt; color: #2a2a2a; }
+  .subtitle { font-size: 13pt; color: #555; font-style: italic; margin-top: 0; }
+  .chapter-tag { display: inline-block; background: #0b3d6d; color: #fff; padding: 4pt 10pt; font-family: "Segoe UI", sans-serif; font-size: 10pt; letter-spacing: 1px; border-radius: 3px; margin-bottom: 6pt; }
+  pre { background: #f4f6f9; border-left: 4px solid #0b3d6d; padding: 10pt 12pt; font-family: Consolas, "Courier New", monospace; font-size: 10pt; line-height: 1.4; overflow-x: auto; white-space: pre; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #eef2f7; padding: 1pt 4pt; border-radius: 2px; }
+  .box { border: 1px solid #c8d4e0; border-radius: 4px; padding: 10pt 14pt; margin: 12pt 0; background: #f9fbfd; }
+  .term { background: #fff8e1; border-left: 4px solid #e0a800; padding: 8pt 12pt; margin: 8pt 0; }
+  .term b { color: #6b4500; }
+  .pitfall { background: #fdecea; border-left: 4px solid #c0392b; padding: 8pt 12pt; margin: 8pt 0; }
+  .recap { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 10pt 14pt; margin: 14pt 0; }
+  .recap h3 { margin-top: 0; color: #1b5e20; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+  th, td { border: 1px solid #c8d4e0; padding: 6pt 9pt; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background: #eef2f7; font-family: "Segoe UI", sans-serif; }
+  ul, ol { margin: 6pt 0 6pt 0; padding-left: 22pt; }
+  li { margin: 3pt 0; }
+  .analogy { background: #eef7ff; border-left: 4px solid #2196f3; padding: 12pt 16pt; margin: 12pt 0; font-style: italic; }
+  .footer-tag { margin-top: 30pt; padding-top: 8pt; border-top: 1px solid #c8d4e0; font-size: 9pt; color: #777; text-align: center; }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="chapter-tag">CHAPTER 0</div>
+<h1>The Foundation</h1>
+<p class="subtitle">Building the kitchen before you cook anything</p>
+
+<h2>What this chapter is about</h2>
+<p>Before we scan a single device, we need a place to <em>store</em> what we find, a way to <em>send orders</em> to the thing doing the scanning, a <em>safe vault</em> for customer passwords, and a <em>ledger</em> that records who did what. This chapter builds that plumbing. Nothing in this chapter actually touches a network — it's all setup.</p>
+
+<div class="analogy">
+<b>Real-life analogy.</b> Imagine you're starting a courier company. Before you accept a single parcel, you need: warehouses where parcels are stored, a dispatch radio to tell drivers where to go, ID cards for each driver, locked envelopes for sensitive contents, and a paper logbook so you can prove later "yes, parcel #482 went to Mr. Sharma at 3:14 pm." If you start delivering before any of that exists, you'll lose parcels, mix up customers, and have no answer when something goes wrong. Chapter 0 is "open the depot before the trucks roll."
+</div>
+
+<h2>Words you'll see (and what they mean)</h2>
+
+<div class="term"><b>API (Application Programming Interface).</b> A doorway one program uses to talk to another. Our NestJS backend exposes an API; the Go agent calls it.</div>
+
+<div class="term"><b>NestJS.</b> The web framework on our server (TypeScript). It's already in your repo at <code>backend/BE</code>.</div>
+
+<div class="term"><b>Postgres (PostgreSQL).</b> The database we already use. Stores everything permanently.</div>
+
+<div class="term"><b>RLS (Row-Level Security).</b> A built-in Postgres feature that says "every row in this table belongs to one tenant; if a query doesn't say the right tenant ID, it sees zero rows." Like putting a name tag on every file in a shared filing cabinet so only the right customer can pull theirs.</div>
+
+<div class="term"><b>Tenant.</b> One customer organisation. Acme Corp is a tenant; Globex is another tenant. They share our software but never see each other's data.</div>
+
+<div class="term"><b>Collector.</b> The Go program that runs <em>inside</em> a customer's network and does the actual scanning. We are extending the existing agent to also work as a collector.</div>
+
+<div class="term"><b>WebSocket.</b> An always-open phone line between collector and server (instead of "hang up and redial" HTTP). You already use <code>gorilla/websocket</code> in the agent.</div>
+
+<div class="term"><b>CIDR (Classless Inter-Domain Routing).</b> A way to write a range of IP addresses. <code>192.168.1.0/24</code> means "all 256 addresses from 192.168.1.0 to 192.168.1.255." We use CIDRs to say "tenant Acme is allowed to scan these ranges and no others."</div>
+
+<div class="term"><b>Envelope encryption.</b> Encrypting a key with another key. We encrypt the customer's firewall password with a per-tenant key (DEK = Data Encryption Key), and we encrypt that DEK with a master key (KEK = Key Encryption Key) held in a vault. To decrypt the password you need both. If the database is leaked, the passwords are useless without the master key.</div>
+
+<div class="term"><b>JIT (Just-In-Time) delivery.</b> The collector receives a password only at the moment it needs it, holds it in RAM, and zeros it out the second the job ends. The collector never writes it to disk.</div>
+
+<div class="term"><b>Audit log.</b> A write-only diary. "On 2026-05-07 at 14:23, user shubham@humancloud.co.in triggered a firewall scan on Acme's site Mumbai-HQ." You can read it forever; you can never edit it.</div>
+
+<div class="term"><b>LISTEN/NOTIFY.</b> Postgres's built-in messaging — when one process tells the database "NOTIFY new_job", every other process that ran "LISTEN new_job" instantly gets a ping. Free real-time messaging without adding Redis or Kafka.</div>
+
+<div class="term"><b>SKIP LOCKED.</b> A Postgres trick to let many workers grab jobs from the same table without stepping on each other. Worker A locks job 1, Worker B's query says "give me a job, but skip any that are locked" — so Worker B picks up job 2 instantly, no fighting.</div>
+
+<h2>What we're building (the picture)</h2>
+
+<pre>
+       Customer's office (e.g. Acme Corp)               |   Our SaaS cloud
+       ────────────────────────────────────             |   ──────────────────
+                                                        |
+       ┌──────────────┐    HTTPS / WebSocket            |   ┌────────────────────┐
+       │  Collector   │  ───────────────────────────►   |   │   NestJS API       │
+       │  (Go agent)  │  ◄───────────────────────────   |   │   (already exists) │
+       └──────────────┘                                 |   └─────────┬──────────┘
+              ▲                                         |             │
+              │ scan jobs                               |             ▼
+              │ + JIT credentials                       |   ┌────────────────────┐
+              ▼                                         |   │   Postgres         │
+       ┌──────────────┐                                 |   │  ┌──────────────┐  │
+       │ The actual   │  (firewall, switches, hosts)    |   │  │ scan_jobs    │  │
+       │ network we   │  — UNTOUCHED IN CHAPTER 0       |   │  │ credentials  │  │
+       │ will scan    │                                 |   │  │ devices …    │  │
+       └──────────────┘                                 |   │  │ audit_log    │  │
+                                                        |   │  └──────────────┘  │
+                                                        |   └────────────────────┘
+</pre>
+
+<p>In Chapter 0 we set up <em>only</em> the right-hand side and the message channel. The left-hand side is wired but does nothing useful yet — it just answers "yes I'm here" and echoes test jobs back.</p>
+
+<h2>Step-by-step plan</h2>
+
+<h3>Step 1 — Create the database tables</h3>
+<p>Add a new NestJS module called <code>discovery</code> at <code>backend/BE/src/discovery/</code>. Inside it, create these TypeORM entities (one TypeScript class per table):</p>
+
+<table>
+<tr><th>Table</th><th>What it stores (in plain English)</th></tr>
+<tr><td><code>site</code></td><td>One physical office or branch belonging to a tenant. "Acme HQ Mumbai", "Acme Branch Pune".</td></tr>
+<tr><td><code>subnet</code></td><td>An address range used at a site. "192.168.10.0/24 is Acme HQ floor 3."</td></tr>
+<tr><td><code>device</code></td><td>One discovered thing — a router, switch, server, printer, laptop.</td></tr>
+<tr><td><code>interface</code></td><td>One network port on a device — like "eth0 on web-prod-01".</td></tr>
+<tr><td><code>ip_address</code></td><td>An IP that's bound to an interface, with timestamp.</td></tr>
+<tr><td><code>mac_address</code></td><td>The hardware address of an interface.</td></tr>
+<tr><td><code>neighbor_edge</code></td><td>"Switch-A port Gi1/0/3 is cabled to Switch-B port Gi2/0/14." This is what makes the topology a graph.</td></tr>
+<tr><td><code>route_entry</code></td><td>One row from a router's routing table.</td></tr>
+<tr><td><code>open_port</code></td><td>"On 10.0.5.42, TCP port 22 is open and the banner says OpenSSH_8.4."</td></tr>
+<tr><td><code>discovery_session</code></td><td>One scan run. "Crawler started at 14:00, finished 14:18, found 312 devices."</td></tr>
+<tr><td><code>observation</code></td><td>One single fact, with provenance. "I saw IP 10.0.5.42 on MAC aa:bb:.. at 14:03 via collector-7." This is the secret sauce — every other table is a view over observations.</td></tr>
+<tr><td><code>credential</code></td><td>An encrypted password/community/SSH key blob.</td></tr>
+<tr><td><code>scan_job</code></td><td>An order: "go run firewall ingest on Acme's HQ firewall."</td></tr>
+<tr><td><code>audit_log</code></td><td>Append-only diary of who triggered what.</td></tr>
+</table>
+
+<p>Every table gets a <code>tenant_id UUID NOT NULL</code> column. Every table gets <code>created_at</code> and <code>updated_at</code>. <code>observation</code> additionally gets <code>seen_at</code>, <code>source_collector_id</code>, <code>session_id</code>.</p>
+
+<h3>Step 2 — Turn on Row-Level Security</h3>
+<p>For every discovery table, run this SQL once:</p>
+<pre>
+ALTER TABLE device ENABLE ROW LEVEL SECURITY;
+CREATE POLICY device_tenant_isolation ON device
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+</pre>
+<p>Then in the NestJS connection-pool wrapper, before every request handler runs, do:</p>
+<pre>
+await queryRunner.query(`SET app.tenant_id = $1`, [req.tenantId]);
+</pre>
+<p>Now even if a developer forgets to add <code>WHERE tenant_id = ?</code> in a query, Postgres itself refuses to return another tenant's rows. Two locks on the same door.</p>
+
+<h3>Step 3 — Build the credential vault</h3>
+<p>Create a service <code>CredentialVaultService</code>:</p>
+<ul>
+<li><b>Encrypt:</b> caller passes plaintext + tenant_id. Service generates a fresh DEK if the tenant doesn't have one yet, encrypts the secret with the DEK using AES-256-GCM, stores the ciphertext.</li>
+<li><b>Decrypt:</b> caller passes ciphertext + tenant_id. Service unwraps the DEK, decrypts, returns plaintext, writes one row to <code>audit_log</code>.</li>
+<li><b>Master key:</b> for development read it from an env var <code>ITOM_MASTER_KEY</code> (32 random bytes, base64). For production, swap to AWS KMS or HashiCorp Vault behind the same interface — same code, different driver.</li>
+</ul>
+
+<h3>Step 4 — Build the scan-job dispatcher</h3>
+<p>The flow we want:</p>
+<pre>
+  User clicks "Run firewall ingest"
+        │
+        ▼
+  POST /v1/discovery/scans  (NestJS)
+        │
+        ├──► INSERT INTO scan_jobs (...) RETURNING id;
+        │
+        ├──► NOTIFY collector_&lt;collectorId&gt;, '{ "jobId": "..." }';
+        │
+        ▼
+  Collector (already LISTENing) wakes up
+        │
+        ├──► SELECT ... FROM scan_jobs WHERE id = ...
+        │       FOR UPDATE SKIP LOCKED;
+        │
+        ├──► do the work
+        │
+        └──► stream results back over WebSocket as ScanJobChunk frames
+</pre>
+
+<p>For Chapter 0 we don't <em>do</em> the work yet — the collector just answers <code>{"pillar":"noop","echo":true}</code> and we confirm a fake observation row appears in the database tagged to the right tenant.</p>
+
+<h3>Step 5 — Add WebSocket message types</h3>
+<p>In <code>backend/agent/internal/wsproto/wsproto.go</code> add four new frame kinds:</p>
+<table>
+<tr><th>Frame</th><th>Direction</th><th>What it carries</th></tr>
+<tr><td><code>ScanJobAssign</code></td><td>server → collector</td><td>Job ID, pillar, target spec, wrapped credentials, tenant CIDR allowlist (signed)</td></tr>
+<tr><td><code>ScanJobAck</code></td><td>collector → server</td><td>"Got it, starting"</td></tr>
+<tr><td><code>ScanJobChunk</code></td><td>collector → server</td><td>A batch of observations (NDJSON)</td></tr>
+<tr><td><code>ScanJobDone</code></td><td>collector → server</td><td>"Finished, summary: 312 devices"</td></tr>
+<tr><td><code>ScanJobError</code></td><td>collector → server</td><td>"Failed because ..."</td></tr>
+</table>
+
+<h3>Step 6 — Build the CIDR allowlist enforcer in the collector</h3>
+<p>Every IP or hostname the collector touches must be inside the tenant's authorized CIDRs. The check happens <em>twice</em>:</p>
+<ol>
+<li>The server includes the tenant's allowlist in <code>ScanJobAssign</code>, signed with the server's private key.</li>
+<li>The collector verifies the signature, then for every target it generates, asks "is this IP in any allowlisted CIDR?" If no → refuse, write a <code>ScanJobError</code>, and write an <code>audit_log</code> row.</li>
+</ol>
+<p>This is "defence in depth" — even if the server has a bug that sends the wrong CIDR list, the collector won't accidentally scan Acme's competitor.</p>
+
+<h2>How we test Chapter 0</h2>
+
+<div class="box">
+<b>Test 1 — round trip a fake job.</b>
+<ol>
+<li>Create two tenants: Acme and Globex.</li>
+<li>Register one collector under Acme.</li>
+<li>POST a scan job with <code>pillar=noop</code> and target <code>192.168.1.1</code>.</li>
+<li>Confirm: collector receives <code>ScanJobAssign</code>, sends <code>ScanJobAck</code>, sends one fake <code>ScanJobChunk</code>, sends <code>ScanJobDone</code>. Database has an <code>observation</code> row tagged <code>tenant_id = Acme</code>.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 2 — RLS actually works.</b>
+<ol>
+<li>Open a database session as the application user.</li>
+<li>Without setting <code>app.tenant_id</code>, run <code>SELECT * FROM device;</code> → must return zero rows.</li>
+<li>Set <code>app.tenant_id</code> to Acme's ID, repeat → must return only Acme's rows.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 3 — credential vault round-trip.</b>
+<ol>
+<li>Encrypt the string <code>"hunter2"</code> for tenant Acme.</li>
+<li>Inspect the database — the stored value must NOT contain "hunter2".</li>
+<li>Decrypt → must return exactly <code>"hunter2"</code>.</li>
+<li>Confirm one row in <code>audit_log</code>.</li>
+</ol>
+</div>
+
+<div class="box">
+<b>Test 4 — CIDR allowlist refuses out-of-scope.</b>
+<ol>
+<li>Configure Acme's allowlist as <code>10.0.0.0/8</code> only.</li>
+<li>Send a job to scan <code>8.8.8.8</code>.</li>
+<li>Collector must refuse with <code>ScanJobError</code>; database must have a refusal row in <code>audit_log</code>; <code>8.8.8.8</code> must never receive a packet.</li>
+</ol>
+</div>
+
+<h2>Things that can go wrong (and what to watch for)</h2>
+
+<div class="pitfall"><b>Forgetting to SET app.tenant_id.</b> If your connection-pool wrapper doesn't run that command on every checkout, RLS silently returns zero rows for everything and you'll think the database is broken. Add a startup test that fails loudly if the variable isn't set.</div>
+
+<div class="pitfall"><b>Storing the master key in the same database as the encrypted blobs.</b> Defeats the entire point. Master key lives in env / KMS / Vault. Never in Postgres.</div>
+
+<div class="pitfall"><b>NOTIFY payload is bigger than 8KB.</b> Postgres truncates it. Send only the job ID in the NOTIFY; collector fetches the rest with <code>SELECT</code>.</div>
+
+<div class="pitfall"><b>Collector trusts the server's CIDR list blindly.</b> If you skip the signature, a compromised server (or a misconfiguration) can point your scanner at any address. Always sign + verify.</div>
+
+<div class="pitfall"><b>Reusing the existing agent's WebSocket without distinguishing "agent mode" from "collector mode".</b> Make the role explicit in the registration message; don't let "host metrics" jobs and "discovery" jobs share the same code path silently.</div>
+
+<h2>Exit checklist (you can move to Chapter 1 only when ALL are true)</h2>
+<ul>
+<li>☐ Two tenants exist, each with a distinct UUID.</li>
+<li>☐ A collector registered to a tenant talks to the server over WebSocket and stays connected for ≥ 10 minutes without dropping.</li>
+<li>☐ A <code>noop</code> scan job round-trips and produces an observation row tagged with the right tenant.</li>
+<li>☐ With <code>app.tenant_id</code> unset, every discovery query returns zero rows.</li>
+<li>☐ A credential encrypts and decrypts correctly; ciphertext does not contain plaintext substring.</li>
+<li>☐ A scan job targeting an out-of-allowlist IP is refused, audited, and never sends a packet.</li>
+<li>☐ Killing the collector mid-job leaves the job <code>status=running</code>, and a stale-job sweeper marks it <code>timeout</code> after a configured TTL.</li>
+</ul>
+
+<div class="recap">
+<h3>Recap card — Chapter 0 in 5 sentences</h3>
+<ol>
+<li>Build the database tables for sites, subnets, devices, interfaces, MACs, IPs, edges, ports, observations, sessions, credentials, jobs, and audits.</li>
+<li>Turn on Postgres Row-Level Security so a missing tenant filter can never leak data.</li>
+<li>Build a credential vault that encrypts secrets with envelope encryption and writes an audit row on every decrypt.</li>
+<li>Wire scan jobs through Postgres LISTEN/NOTIFY + SKIP LOCKED + your existing WebSocket — no Redis needed.</li>
+<li>Make the collector verify a signed CIDR allowlist and refuse anything outside it; test that the round-trip works with a <code>noop</code> job before you let any pillar do real work.</li>
+</ol>
+</div>
+
+<div class="footer-tag">ITOM Network Discovery — Chapter 0 of 6 — Foundation</div>
+
+</body>
+</html>
